@@ -51,10 +51,8 @@ _EXTENSION_DIR = Path(__file__).resolve().parent.parent
 # Script class
 # ---------------------------------------------------------------------------
 
-_BaseClass = scripts.Script
 
-
-class AutoPromptReason(_BaseClass):  # type: ignore[misc,valid-type]
+class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     """SD WebUI Script that enhances prompts using an LLM before generation.
 
     Lifecycle methods called by AUTOMATIC1111:
