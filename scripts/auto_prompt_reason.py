@@ -239,7 +239,24 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             SD WebUI continues its normal processing pipeline regardless of
             the return value.
         """
+        _log.debug(
+            "AutoPromptReason.run: invoked enabled=%r provider=%r model=%r"
+            " effort=%r base_url=%r has_api_key=%r"
+            " user_prompt_len=%d has_system_prompt=%r",
+            enabled,
+            provider_type,
+            model_name,
+            reasoning_effort,
+            base_url,
+            bool(api_key),
+            len(user_prompt),
+            bool(system_prompt),
+        )
+
         if not enabled:
+            _log.info(
+                "AutoPromptReason.run: extension disabled — skipping LLM call."
+            )
             return None
 
         try:
@@ -247,6 +264,10 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             # available immediately after the response is received.
             config = self._load_config()
             injection_mode: str = config.get("prompt_injection", "append")
+            _log.debug(
+                "AutoPromptReason.run: config loaded injection_mode=%r",
+                injection_mode,
+            )
 
             # Build provider kwargs; only pass api_key when non-empty.
             kwargs: dict[str, Any] = {
@@ -256,27 +277,46 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             if api_key:
                 kwargs["api_key"] = SecretStr(api_key)
 
-            client = LLMClient.create(provider_type, **kwargs)
-
             _log.debug(
-                "AutoPromptReason.run: calling provider=%r model=%r effort=%r",
+                "AutoPromptReason.run: creating LLMClient"
+                " provider=%r model=%r base_url=%r has_api_key=%r",
                 provider_type,
                 model_name,
-                reasoning_effort,
+                base_url,
+                bool(api_key),
             )
+            client = LLMClient.create(provider_type, **kwargs)
+            _log.debug("AutoPromptReason.run: LLMClient.create() returned %r", type(client).__name__)
 
             # Treat empty string as "no system prompt" so the provider falls
             # back to its own defaults.
             effective_system_prompt: Optional[str] = system_prompt or None
 
+            _log.info(
+                "AutoPromptReason.run: calling client.generate()"
+                " provider=%r model=%r effort=%r"
+                " user_prompt_len=%d has_system_prompt=%r",
+                provider_type,
+                model_name,
+                reasoning_effort,
+                len(user_prompt),
+                effective_system_prompt is not None,
+            )
             response: ReasoningResponse = client.generate(
                 user_prompt,
                 reasoning_effort=reasoning_effort,
                 system_prompt=effective_system_prompt,
             )
+            _log.debug(
+                "AutoPromptReason.run: generate() returned"
+                " total_tokens=%r reasoning_time_ms=%r",
+                response.total_tokens,
+                response.reasoning_time_ms,
+            )
 
             # Persist response for potential use by postprocess().
             self._last_response = response
+            _log.debug("AutoPromptReason.run: _last_response stored")
 
             # Record in session history.
             self._history.add_from_response(
@@ -284,8 +324,13 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 response=response,
                 reasoning_effort=reasoning_effort,
             )
+            _log.debug(
+                "AutoPromptReason.run: history written history_size=%d",
+                len(self._history),
+            )
 
             # Inject the LLM answer into the processing prompt.
+            original_prompt_len = len(p.prompt)
             if injection_mode == "replace":
                 p.prompt = response.final_answer
             elif injection_mode == "prepend":
@@ -295,9 +340,12 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 p.prompt = f"{p.prompt}, {response.final_answer}"
 
             _log.info(
-                "AutoPromptReason: prompt injected (mode=%r, provider=%r)",
+                "AutoPromptReason.run: prompt injected"
+                " mode=%r provider=%r original_len=%d result_len=%d",
                 injection_mode,
                 provider_type,
+                original_prompt_len,
+                len(p.prompt),
             )
 
         except Exception:  # noqa: BLE001

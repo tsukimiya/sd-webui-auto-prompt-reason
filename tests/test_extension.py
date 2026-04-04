@@ -10,6 +10,7 @@ inherits from ``object`` and can be instantiated freely.
 """
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -443,3 +444,176 @@ class TestAutoPromptReasonSystemPrompt:
         call_args = mock_instance.generate.call_args
         assert call_args is not None
         assert call_args.kwargs.get("system_prompt") is None
+
+
+# ---------------------------------------------------------------------------
+# TestAutoPromptReasonLogging
+# ---------------------------------------------------------------------------
+
+
+class TestAutoPromptReasonLogging:
+    """Tests that verify trace log output from :py:meth:`AutoPromptReason.run`.
+
+    Logging assertions are kept minimal: we verify the *key diagnostic phrases*
+    appear in the captured log rather than the full formatted string, so the
+    tests remain stable against minor message wording changes.
+    """
+
+    # ------------------------------------------------------------------
+    # Disabled path — must log that the extension was skipped
+    # ------------------------------------------------------------------
+
+    def test_disabled_logs_skip_message(self, caplog: pytest.LogCaptureFixture) -> None:
+        """When disabled, an INFO message indicating skip is emitted."""
+        mock_client_class, _ = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            ext = AutoPromptReason()
+            p = _make_processing_obj()
+            with caplog.at_level(logging.INFO, logger="scripts.auto_prompt_reason"):
+                ext.run(p, False, "ollama", "m", "http://localhost", "", "medium", "q", "")
+        messages = [r.message for r in caplog.records]
+        assert any("disabled" in m or "skipping" in m for m in messages), (
+            f"Expected a 'disabled/skipping' log entry; got: {messages}"
+        )
+
+    def test_disabled_does_not_log_generate_called(self, caplog: pytest.LogCaptureFixture) -> None:
+        """When disabled, no message about calling generate() must appear."""
+        mock_client_class, _ = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            ext = AutoPromptReason()
+            p = _make_processing_obj()
+            with caplog.at_level(logging.DEBUG, logger="scripts.auto_prompt_reason"):
+                ext.run(p, False, "ollama", "m", "http://localhost", "", "medium", "q", "")
+        messages = [r.message for r in caplog.records]
+        assert not any("generate()" in m for m in messages), (
+            f"generate() must not be mentioned in disabled path; got: {messages}"
+        )
+
+    # ------------------------------------------------------------------
+    # Enabled path — invocation entry + call parameters
+    # ------------------------------------------------------------------
+
+    def test_enabled_logs_run_invoked(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A DEBUG entry recording that run() was invoked is emitted."""
+        mock_client_class, _ = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                with caplog.at_level(logging.DEBUG, logger="scripts.auto_prompt_reason"):
+                    ext.run(p, True, "ollama", "mymodel", "http://localhost", "", "high", "q", "")
+        messages = [r.message for r in caplog.records]
+        assert any("invoked" in m for m in messages), (
+            f"Expected an 'invoked' log entry; got: {messages}"
+        )
+
+    def test_enabled_logs_provider_and_model(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Provider type and model name appear in at least one DEBUG log entry."""
+        mock_client_class, _ = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                with caplog.at_level(logging.DEBUG, logger="scripts.auto_prompt_reason"):
+                    ext.run(p, True, "gemini", "gemini-pro", "http://localhost", "", "low", "q", "")
+        full_output = " ".join(r.message for r in caplog.records)
+        assert "gemini" in full_output, f"Provider 'gemini' not found in logs: {full_output!r}"
+        assert "gemini-pro" in full_output, f"Model 'gemini-pro' not found in logs: {full_output!r}"
+
+    def test_enabled_logs_has_api_key_false_when_empty(self, caplog: pytest.LogCaptureFixture) -> None:
+        """When api_key is empty, ``has_api_key=False`` appears in the entry log."""
+        mock_client_class, _ = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                with caplog.at_level(logging.DEBUG, logger="scripts.auto_prompt_reason"):
+                    ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
+        full_output = " ".join(r.message for r in caplog.records)
+        assert "has_api_key=False" in full_output, (
+            f"Expected 'has_api_key=False' in logs: {full_output!r}"
+        )
+
+    def test_enabled_logs_has_api_key_true_when_provided(self, caplog: pytest.LogCaptureFixture) -> None:
+        """When api_key is non-empty, ``has_api_key=True`` appears in the entry log."""
+        mock_client_class, _ = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                with caplog.at_level(logging.DEBUG, logger="scripts.auto_prompt_reason"):
+                    ext.run(p, True, "openai_compatible", "gpt-4o", "http://api", "sk-secret", "medium", "q", "")
+        full_output = " ".join(r.message for r in caplog.records)
+        assert "has_api_key=True" in full_output, (
+            f"Expected 'has_api_key=True' in logs: {full_output!r}"
+        )
+        # The raw secret must NEVER appear in any log message
+        assert "sk-secret" not in full_output, "API key value must not appear in logs"
+
+    # ------------------------------------------------------------------
+    # Enabled path — config loaded + generate() called
+    # ------------------------------------------------------------------
+
+    def test_enabled_logs_config_loaded(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A DEBUG entry reporting ``injection_mode`` from config is emitted."""
+        mock_client_class, _ = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                with caplog.at_level(logging.DEBUG, logger="scripts.auto_prompt_reason"):
+                    ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
+        full_output = " ".join(r.message for r in caplog.records)
+        assert "injection_mode" in full_output, (
+            f"Expected 'injection_mode' in config-loaded log: {full_output!r}"
+        )
+
+    def test_enabled_logs_generate_called(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An INFO entry about calling ``client.generate()`` is emitted."""
+        mock_client_class, _ = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                with caplog.at_level(logging.INFO, logger="scripts.auto_prompt_reason"):
+                    ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
+        messages = [r.message for r in caplog.records if r.levelno >= logging.INFO]
+        assert any("generate()" in m for m in messages), (
+            f"Expected a generate() INFO log; got: {messages}"
+        )
+
+    def test_enabled_logs_user_prompt_length_not_content(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Logs include ``user_prompt_len`` but must NOT contain the raw prompt text."""
+        mock_client_class, _ = _patch_llm()
+        secret_prompt = "a very specific secret prompt text"
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                with caplog.at_level(logging.DEBUG, logger="scripts.auto_prompt_reason"):
+                    ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", secret_prompt, "")
+        full_output = " ".join(r.message for r in caplog.records)
+        assert "user_prompt_len" in full_output, (
+            f"Expected 'user_prompt_len' in logs: {full_output!r}"
+        )
+        assert secret_prompt not in full_output, (
+            "Raw prompt text must not appear in any log message"
+        )
+
+    # ------------------------------------------------------------------
+    # Enabled path — post-generate: response stored + prompt injected
+    # ------------------------------------------------------------------
+
+    def test_enabled_logs_prompt_injected(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An INFO entry confirming prompt injection is emitted after successful run."""
+        mock_client_class, _ = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                with caplog.at_level(logging.INFO, logger="scripts.auto_prompt_reason"):
+                    ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
+        messages = [r.message for r in caplog.records if r.levelno >= logging.INFO]
+        assert any("injected" in m for m in messages), (
+            f"Expected a 'prompt injected' INFO log; got: {messages}"
+        )

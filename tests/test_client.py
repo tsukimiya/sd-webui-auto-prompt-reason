@@ -6,15 +6,18 @@ network traffic is produced by any test in this module.
 
 Test classes
 ------------
-* ``TestLLMClientFactory``     — ``LLMClient.create`` factory method
-* ``TestLLMClientGenerate``    — synchronous ``generate()``
+* ``TestLLMClientFactory``       — ``LLMClient.create`` factory method
+* ``TestLLMClientGenerate``      — synchronous ``generate()``
 * ``TestLLMClientGenerateAsync`` — async ``generate_async()``
-* ``TestBuildUrl``             — ``_build_url()`` URL construction
-* ``TestBuildHeaders``         — ``_build_headers()`` header construction
+* ``TestBuildUrl``               — ``_build_url()`` URL construction
+* ``TestBuildHeaders``           — ``_build_headers()`` header construction
+* ``TestRedactionHelpers``       — module-level redaction/summary helpers
+* ``TestLogging``                — trace log messages emitted by ``generate()``
 """
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any
@@ -23,6 +26,13 @@ from unittest.mock import MagicMock, patch, call
 import pytest  # type: ignore[import-untyped]
 
 from apr_modules.llm_client import LLMClient  # type: ignore[import]
+from apr_modules.llm_client import (  # type: ignore[import]
+    _redact_url,
+    _redact_headers,
+    _summarise_payload,
+    _payload_meta,
+    _contains_image,
+)
 from apr_modules.models.reasoning_response import ReasoningResponse  # type: ignore[import]
 from apr_modules.providers.base_provider import SecretStr, ProviderType  # type: ignore[import]
 from apr_modules.providers.ollama_provider import OllamaProvider  # type: ignore[import]
@@ -518,3 +528,475 @@ class TestLLMClientSystemPromptForwarding:
         client = LLMClient.create("gemini", api_key=SecretStr("key"))
         payload = client._provider.build_request("describe this")
         assert "systemInstruction" not in payload
+
+
+# ===========================================================================
+# TestRedactionHelpers
+# ===========================================================================
+
+
+class TestRedactionHelpers:
+    """Unit tests for the module-level redaction / summary helpers."""
+
+    # --- _redact_url ---
+
+    def test_redact_url_removes_key_param_value(self) -> None:
+        """``?key=<secret>`` is replaced with ``?key=**redacted**``."""
+        url = "https://api.example.com/v1/models/gemini-2.0-flash:generateContent?key=supersecret"
+        redacted = _redact_url(url)
+        assert "supersecret" not in redacted
+        assert "?key=**redacted**" in redacted
+
+    def test_redact_url_preserves_non_key_urls(self) -> None:
+        """URLs without a ``?key=`` param are returned unchanged."""
+        url = "http://localhost:11434/api/chat"
+        assert _redact_url(url) == url
+
+    def test_redact_url_preserves_path_before_key(self) -> None:
+        """The URL path before ``?key=`` is unchanged."""
+        url = "https://api.example.com/v1/models/foo:gen?key=abc123"
+        redacted = _redact_url(url)
+        assert "https://api.example.com/v1/models/foo:gen" in redacted
+
+    def test_redact_url_does_not_expose_key_value(self) -> None:
+        """After redaction, the original key value is not present anywhere."""
+        secret = "my-very-secret-gemini-key"
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini:gen?key={secret}"
+        assert secret not in _redact_url(url)
+
+    # --- _redact_headers ---
+
+    def test_redact_headers_masks_authorization(self) -> None:
+        """``Authorization`` header value is replaced with ``Bearer **redacted**``."""
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer sk-real-key"}
+        result = _redact_headers(headers)
+        assert result["Authorization"] == "Bearer **redacted**"
+        assert "sk-real-key" not in str(result)
+
+    def test_redact_headers_preserves_content_type(self) -> None:
+        """Non-secret headers pass through unchanged."""
+        headers = {"Content-Type": "application/json"}
+        assert _redact_headers(headers) == {"Content-Type": "application/json"}
+
+    def test_redact_headers_no_mutation(self) -> None:
+        """Original headers dict is not mutated."""
+        headers = {"Authorization": "Bearer real-secret"}
+        _redact_headers(headers)
+        assert headers["Authorization"] == "Bearer real-secret"
+
+    def test_redact_headers_case_insensitive_authorization(self) -> None:
+        """``authorization`` (lowercase) is also masked."""
+        headers = {"authorization": "Bearer sk-lower"}
+        result = _redact_headers(headers)
+        assert "sk-lower" not in str(result)
+
+    # --- _summarise_payload ---
+
+    def test_summarise_payload_truncates_gemini_inline_data(self) -> None:
+        """Gemini ``inlineData.data`` blobs are truncated, not dumped in full."""
+        long_b64 = "A" * 500
+        payload: dict[str, Any] = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": "describe this"},
+                        {"inlineData": {"mimeType": "image/jpeg", "data": long_b64}},
+                    ]
+                }
+            ]
+        }
+        summary = _summarise_payload(payload)
+        # Navigate to the data field in the summary.
+        data_val = summary["contents"][0]["parts"][1]["inlineData"]["data"]
+        assert len(data_val) < len(long_b64)
+        assert "chars total" in data_val
+
+    def test_summarise_payload_truncates_openai_data_url(self) -> None:
+        """OpenAI-style ``data:image/…;base64,…`` URLs are truncated."""
+        long_b64 = "B" * 500
+        payload: dict[str, Any] = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "url": f"data:image/jpeg;base64,{long_b64}"}
+                    ],
+                }
+            ]
+        }
+        summary = _summarise_payload(payload)
+        url_val = summary["messages"][0]["content"][0]["url"]
+        assert len(url_val) < len(long_b64) + 30  # much shorter than original
+        assert "chars total" in url_val
+
+    def test_summarise_payload_does_not_mutate_original(self) -> None:
+        """``_summarise_payload`` returns a deep copy; original is untouched."""
+        long_b64 = "C" * 200
+        payload: dict[str, Any] = {
+            "contents": [{"parts": [{"inlineData": {"mimeType": "image/jpeg", "data": long_b64}}]}]
+        }
+        _summarise_payload(payload)
+        assert payload["contents"][0]["parts"][0]["inlineData"]["data"] == long_b64
+
+    def test_summarise_payload_text_only_unchanged(self) -> None:
+        """Text-only payloads pass through without modification."""
+        payload: dict[str, Any] = {
+            "model": "qwen3.5:7b",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+        summary = _summarise_payload(payload)
+        assert summary["messages"][0]["content"] == "hello"
+
+    # --- _payload_meta ---
+
+    def test_payload_meta_reports_message_count(self) -> None:
+        """``_payload_meta`` includes the message count for Ollama/OpenAI payloads."""
+        payload: dict[str, Any] = {
+            "model": "llama3",
+            "messages": [{"role": "user"}, {"role": "assistant"}],
+        }
+        meta = _payload_meta(payload)
+        assert "messages=2" in meta
+
+    def test_payload_meta_detects_image(self) -> None:
+        """``_payload_meta`` reports ``has_image=True`` when image data present."""
+        payload: dict[str, Any] = {
+            "contents": [
+                {
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/jpeg", "data": "abc123"}}
+                    ]
+                }
+            ]
+        }
+        meta = _payload_meta(payload)
+        assert "has_image=True" in meta
+
+    def test_payload_meta_detects_system_instruction(self) -> None:
+        """``_payload_meta`` reports ``has_system=True`` for Gemini system instructions."""
+        payload: dict[str, Any] = {
+            "contents": [],
+            "systemInstruction": {"parts": [{"text": "Be concise."}]},
+        }
+        meta = _payload_meta(payload)
+        assert "has_system=True" in meta
+
+    def test_payload_meta_no_image_no_system(self) -> None:
+        """Minimal text payload has no image/system flags."""
+        payload: dict[str, Any] = {"model": "test", "messages": [{"role": "user"}]}
+        meta = _payload_meta(payload)
+        assert "has_image" not in meta
+        assert "has_system" not in meta
+
+    # --- _contains_image ---
+
+    def test_contains_image_true_for_inline_data(self) -> None:
+        """Returns ``True`` when Gemini ``inlineData`` is present."""
+        assert _contains_image({"inlineData": {"data": "abc"}}) is True
+
+    def test_contains_image_true_for_openai_image_url(self) -> None:
+        """Returns ``True`` for OpenAI ``type: image_url`` content part."""
+        assert _contains_image({"type": "image_url", "url": "data:image/jpeg;base64,abc"}) is True
+
+    def test_contains_image_false_for_text_only(self) -> None:
+        """Returns ``False`` for text-only content."""
+        assert _contains_image({"type": "text", "text": "hello"}) is False
+
+    def test_contains_image_recursive_list(self) -> None:
+        """Recursively detects images nested inside lists."""
+        obj = [{"text": "hi"}, {"inlineData": {"data": "xyz"}}]
+        assert _contains_image(obj) is True
+
+
+# ===========================================================================
+# TestLogging
+# ===========================================================================
+
+_PATCH_REQUESTS = "apr_modules.llm_client.requests.post"
+
+
+def _make_mock_response_for_log_tests(
+    content: str = "answer",
+) -> MagicMock:
+    """Return a minimal mock response for logging tests (Ollama-shaped)."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "message": {"role": "assistant", "content": content, "thinking": ""},
+        "eval_count": 10,
+        "prompt_eval_count": 40,
+    }
+    mock_resp.raise_for_status.return_value = None
+    return mock_resp
+
+
+class TestLogging:
+    """Verify trace log messages emitted by :py:meth:`LLMClient.generate`.
+
+    All tests capture DEBUG records from ``apr_modules.llm_client`` and check
+    that the expected lifecycle stages are logged and that no secrets appear.
+    """
+
+    def _capture_logs(
+        self,
+        client: LLMClient,
+        prompt: str = "test prompt",
+        image_data: "str | None" = None,
+        system_prompt: "str | None" = None,
+        reasoning_effort: str = "medium",
+    ) -> list[str]:
+        """Run ``generate()`` with a mocked HTTP response and return log messages."""
+        captured: list[str] = []
+
+        class _Handler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(self.format(record))
+
+        logger = logging.getLogger("apr_modules.llm_client")
+        handler = _Handler()
+        handler.setLevel(logging.DEBUG)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        try:
+            with patch(_PATCH_REQUESTS) as mock_post:
+                mock_post.return_value = _make_mock_response_for_log_tests()
+                client.generate(
+                    prompt,
+                    image_data=image_data,
+                    system_prompt=system_prompt,
+                    reasoning_effort=reasoning_effort,
+                )
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+        return captured
+
+    # --- lifecycle stages ---
+
+    def test_config_validated_logged(self) -> None:
+        """``[CONFIG VALIDATED]`` appears in the log on a successful call."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        assert any("[CONFIG VALIDATED]" in msg for msg in logs)
+
+    def test_payload_prepared_logged(self) -> None:
+        """``[PAYLOAD PREPARED]`` appears in the log on a successful call."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        assert any("[PAYLOAD PREPARED]" in msg for msg in logs)
+
+    def test_request_sending_logged(self) -> None:
+        """``[REQUEST SENDING]`` appears just before the HTTP call."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        assert any("[REQUEST SENDING]" in msg for msg in logs)
+
+    def test_response_received_logged(self) -> None:
+        """``[RESPONSE RECEIVED]`` appears after a successful HTTP response."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        assert any("[RESPONSE RECEIVED]" in msg for msg in logs)
+
+    def test_json_parsed_logged(self) -> None:
+        """``[JSON PARSED]`` appears after response JSON is decoded."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        assert any("[JSON PARSED]" in msg for msg in logs)
+
+    def test_request_failed_logged_on_http_error(self) -> None:
+        """``[REQUEST FAILED]`` is logged when the server returns an HTTP error."""
+        import requests as req_module
+
+        client = _make_ollama_client()
+        captured: list[str] = []
+
+        class _Handler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(self.format(record))
+
+        logger = logging.getLogger("apr_modules.llm_client")
+        handler = _Handler()
+        handler.setLevel(logging.DEBUG)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        try:
+            with patch(_PATCH_REQUESTS) as mock_post:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 500
+                mock_resp.raise_for_status.side_effect = req_module.HTTPError("500 Server Error")
+                mock_post.return_value = mock_resp
+                with pytest.raises(req_module.HTTPError):
+                    client.generate("test prompt")
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        assert any("[REQUEST FAILED]" in msg for msg in captured)
+
+    def test_request_failed_logged_on_connection_error(self) -> None:
+        """``[REQUEST FAILED]`` is logged for low-level network errors."""
+        import requests as req_module
+
+        client = _make_ollama_client()
+        captured: list[str] = []
+
+        class _Handler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(self.format(record))
+
+        logger = logging.getLogger("apr_modules.llm_client")
+        handler = _Handler()
+        handler.setLevel(logging.DEBUG)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        try:
+            with patch(_PATCH_REQUESTS) as mock_post:
+                mock_post.side_effect = req_module.ConnectionError("refused")
+                with pytest.raises(req_module.ConnectionError):
+                    client.generate("test prompt")
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        assert any("[REQUEST FAILED]" in msg for msg in captured)
+
+    # --- provider / model metadata in logs ---
+
+    def test_provider_name_in_logs(self) -> None:
+        """``provider=ollama`` appears in log output."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        assert any("provider=ollama" in msg for msg in logs)
+
+    def test_model_name_in_logs(self) -> None:
+        """Model name appears in log output."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        assert any("qwen3.5:7b" in msg for msg in logs)
+
+    def test_elapsed_ms_in_response_received_log(self) -> None:
+        """``elapsed_ms=`` field appears in the ``[RESPONSE RECEIVED]`` log."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        response_log = next(m for m in logs if "[RESPONSE RECEIVED]" in m)
+        assert "elapsed_ms=" in response_log
+
+    def test_http_status_in_response_received_log(self) -> None:
+        """HTTP status code 200 appears in the ``[RESPONSE RECEIVED]`` log."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        response_log = next(m for m in logs if "[RESPONSE RECEIVED]" in m)
+        assert "status=200" in response_log
+
+    def test_response_keys_in_json_parsed_log(self) -> None:
+        """Top-level response JSON keys appear in the ``[JSON PARSED]`` log."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client)
+        json_log = next(m for m in logs if "[JSON PARSED]" in m)
+        # The mock response has keys: message, eval_count, prompt_eval_count
+        assert "message" in json_log
+
+    def test_image_presence_flagged_in_payload_log(self) -> None:
+        """``has_image=True`` appears in ``[PAYLOAD PREPARED]`` when image provided."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client, image_data="fake_base64_image_data")
+        payload_log = next(m for m in logs if "[PAYLOAD PREPARED]" in m)
+        assert "has_image=True" in payload_log
+
+    def test_system_prompt_flagged_in_payload_log(self) -> None:
+        """``has_system=True`` appears in ``[PAYLOAD PREPARED]`` when system_prompt provided."""
+        client = _make_ollama_client()
+        logs = self._capture_logs(client, system_prompt="You are helpful.")
+        payload_log = next(m for m in logs if "[PAYLOAD PREPARED]" in m)
+        assert "has_system=True" in payload_log
+
+    # --- redaction / no-leak checks ---
+
+    def test_openai_api_key_not_in_logs(self) -> None:
+        """Raw OpenAI API key is never present in any log message."""
+        client = _make_openai_client()  # uses api_key=SecretStr("sk-test")
+        logs = self._capture_logs(client)
+        for msg in logs:
+            assert "sk-test" not in msg, f"API key leaked in log: {msg!r}"
+
+    def test_gemini_api_key_not_in_request_sending_log(self) -> None:
+        """Gemini ``?key=<value>`` is redacted in ``[REQUEST SENDING]`` log."""
+        client = LLMClient.create("gemini", api_key=SecretStr("gemini-secret-key"))
+        logs = self._capture_logs(client)
+        sending_logs = [m for m in logs if "[REQUEST SENDING]" in m]
+        assert sending_logs, "Expected at least one [REQUEST SENDING] log"
+        for msg in sending_logs:
+            assert "gemini-secret-key" not in msg, f"Gemini key leaked in log: {msg!r}"
+
+    def test_authorization_header_value_not_in_logs(self) -> None:
+        """Raw ``Authorization: Bearer <token>`` value is not logged."""
+        client = _make_openai_client()  # has Authorization header with "sk-test"
+        logs = self._capture_logs(client)
+        for msg in logs:
+            # The token value must not appear even if "Authorization" appears
+            assert "Bearer sk-test" not in msg, f"Auth header leaked: {msg!r}"
+
+    def test_async_worker_started_logged(self) -> None:
+        """``[ASYNC WORKER STARTED]`` is logged when ``generate_async`` is called."""
+        client = _make_ollama_client()
+        captured: list[str] = []
+        done = threading.Event()
+
+        class _Handler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(self.format(record))
+
+        logger = logging.getLogger("apr_modules.llm_client")
+        handler = _Handler()
+        handler.setLevel(logging.DEBUG)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+
+        def on_done(_: object) -> None:
+            done.set()
+
+        try:
+            with patch(_PATCH_REQUESTS) as mock_post:
+                mock_post.return_value = _make_mock_response_for_log_tests()
+                client.generate_async("prompt", on_done, on_done)
+            done.wait(timeout=5)
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        assert any("[ASYNC WORKER STARTED]" in m for m in captured)
+
+    def test_async_worker_done_logged_on_success(self) -> None:
+        """``[ASYNC WORKER DONE]`` is logged when ``generate_async`` succeeds."""
+        client = _make_ollama_client()
+        captured: list[str] = []
+        done = threading.Event()
+
+        class _Handler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(self.format(record))
+
+        logger = logging.getLogger("apr_modules.llm_client")
+        handler = _Handler()
+        handler.setLevel(logging.DEBUG)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+
+        def on_done(_: object) -> None:
+            done.set()
+
+        try:
+            with patch(_PATCH_REQUESTS) as mock_post:
+                mock_post.return_value = _make_mock_response_for_log_tests()
+                client.generate_async("prompt", on_done, on_done)
+            done.wait(timeout=5)
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        assert any("[ASYNC WORKER DONE]" in m for m in captured)
