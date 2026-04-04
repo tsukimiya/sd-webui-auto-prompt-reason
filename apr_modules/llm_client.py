@@ -28,11 +28,11 @@ from typing import Callable, Optional
 
 import requests
 
-from modules.models.reasoning_response import ReasoningResponse
-from modules.providers.base_provider import BaseProvider, ProviderType
-from modules.providers.gemini_provider import GeminiProvider
-from modules.providers.ollama_provider import OllamaProvider
-from modules.providers.openai_provider import OpenAICompatibleProvider
+from apr_modules.models.reasoning_response import ReasoningResponse
+from apr_modules.providers.base_provider import BaseProvider, ProviderType
+from apr_modules.providers.gemini_provider import GeminiProvider
+from apr_modules.providers.ollama_provider import OllamaProvider
+from apr_modules.providers.openai_provider import OpenAICompatibleProvider
 
 
 class LLMClient:

@@ -16,10 +16,10 @@ from typing import Any
 
 import pytest  # type: ignore[import-untyped]
 
-from modules.providers.base_provider import ProviderType, SecretStr  # type: ignore[import]
-from modules.providers.ollama_provider import OllamaProvider  # type: ignore[import]
-from modules.providers.openai_provider import OpenAICompatibleProvider  # type: ignore[import]
-from modules.providers.gemini_provider import GeminiProvider  # type: ignore[import]
+from apr_modules.providers.base_provider import ProviderType, SecretStr  # type: ignore[import]
+from apr_modules.providers.ollama_provider import OllamaProvider  # type: ignore[import]
+from apr_modules.providers.openai_provider import OpenAICompatibleProvider  # type: ignore[import]
+from apr_modules.providers.gemini_provider import GeminiProvider  # type: ignore[import]
 
 
 # ===========================================================================

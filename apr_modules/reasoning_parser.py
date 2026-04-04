@@ -9,7 +9,7 @@ this is pure parsing / data-transformation logic.
 
 from typing import Optional
 
-from modules.models.reasoning_response import ReasoningResponse
+from apr_modules.models.reasoning_response import ReasoningResponse
 
 
 class ReasoningParser:

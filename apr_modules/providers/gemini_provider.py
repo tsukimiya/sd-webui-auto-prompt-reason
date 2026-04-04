@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from modules.models.reasoning_response import ReasoningResponse
-from modules.providers.base_provider import BaseProvider, ProviderType, SecretStr
+from apr_modules.models.reasoning_response import ReasoningResponse
+from apr_modules.providers.base_provider import BaseProvider, ProviderType, SecretStr
 
 
 class GeminiProvider(BaseProvider):

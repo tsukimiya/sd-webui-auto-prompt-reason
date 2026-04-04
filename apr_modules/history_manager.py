@@ -14,7 +14,7 @@ from itertools import islice
 from dataclasses import dataclass
 from typing import Optional
 
-from modules.models.reasoning_response import ReasoningResponse
+from apr_modules.models.reasoning_response import ReasoningResponse
 
 
 @dataclass

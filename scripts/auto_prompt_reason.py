@@ -25,11 +25,11 @@ from typing import Any, Optional
 
 import yaml
 
-from modules.history_manager import HistoryManager
-from modules.llm_client import LLMClient
-from modules.models.reasoning_response import ReasoningResponse
-from modules.providers.base_provider import SecretStr
-from modules.ui_components import build_thinking_display, build_metrics_display, update_thinking_display
+from apr_modules.history_manager import HistoryManager
+from apr_modules.llm_client import LLMClient
+from apr_modules.models.reasoning_response import ReasoningResponse
+from apr_modules.providers.base_provider import SecretStr
+from apr_modules.ui_components import build_thinking_display, build_metrics_display, update_thinking_display
 
 # ---------------------------------------------------------------------------
 # SD WebUI / Gradio — only available at runtime inside AUTOMATIC1111

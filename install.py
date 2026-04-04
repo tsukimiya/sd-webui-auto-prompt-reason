@@ -1,29 +1,6 @@
-import sys
-import os
-
-# Save original sys.path to restore later (avoid affecting other extensions)
-original_path = sys.path.copy()
-
-# Fix module path to import from sd_reforge root
-# This ensures we import the correct launch.py from parent directory
-extension_dir = os.path.dirname(os.path.realpath(__file__))
-sd_reforge_dir = os.path.dirname(os.path.dirname(extension_dir))
-
-# Remove extension directory from path to prevent importing local modules
-if extension_dir in sys.path:
-    sys.path.remove(extension_dir)
-
-# Add sd_reforge to path first
-sys.path.insert(0, sd_reforge_dir)
-
 import launch
 
-# Restore original sys.path to avoid affecting other extensions
-sys.path[:] = original_path
+# TODO: add pip dependency if need extra module only on extension
 
-
-def check_and_install():
-    pass
-
-
-check_and_install()
+# if not launch.is_installed("requests"):
+#     launch.run_pip("install requests", "requirements for sd-webui-auto-prompt-reason")

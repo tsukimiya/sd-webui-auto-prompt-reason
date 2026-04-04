@@ -18,8 +18,8 @@ from typing import Any, Optional
 
 import pytest  # type: ignore[import-untyped]
 
-from modules.reasoning_parser import ReasoningParser  # type: ignore[import]
-from modules.models.reasoning_response import ReasoningResponse  # type: ignore[import]
+from apr_modules.reasoning_parser import ReasoningParser  # type: ignore[import]
+from apr_modules.models.reasoning_response import ReasoningResponse  # type: ignore[import]
 
 
 # ===========================================================================

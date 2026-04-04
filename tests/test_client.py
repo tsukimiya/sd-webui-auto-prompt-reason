@@ -22,12 +22,12 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest  # type: ignore[import-untyped]
 
-from modules.llm_client import LLMClient  # type: ignore[import]
-from modules.models.reasoning_response import ReasoningResponse  # type: ignore[import]
-from modules.providers.base_provider import SecretStr, ProviderType  # type: ignore[import]
-from modules.providers.ollama_provider import OllamaProvider  # type: ignore[import]
-from modules.providers.openai_provider import OpenAICompatibleProvider  # type: ignore[import]
-from modules.providers.gemini_provider import GeminiProvider  # type: ignore[import]
+from apr_modules.llm_client import LLMClient  # type: ignore[import]
+from apr_modules.models.reasoning_response import ReasoningResponse  # type: ignore[import]
+from apr_modules.providers.base_provider import SecretStr, ProviderType  # type: ignore[import]
+from apr_modules.providers.ollama_provider import OllamaProvider  # type: ignore[import]
+from apr_modules.providers.openai_provider import OpenAICompatibleProvider  # type: ignore[import]
+from apr_modules.providers.gemini_provider import GeminiProvider  # type: ignore[import]
 
 
 # ---------------------------------------------------------------------------
