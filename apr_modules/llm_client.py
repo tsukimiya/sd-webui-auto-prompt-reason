@@ -131,6 +131,7 @@ class LLMClient:
         prompt: str,
         image_data: Optional[str] = None,
         reasoning_effort: str = "medium",
+        system_prompt: Optional[str] = None,
     ) -> ReasoningResponse:
         """Send a prompt to the configured LLM provider and return the response.
 
@@ -148,6 +149,10 @@ class LLMClient:
         reasoning_effort:
             Hint for models that support variable reasoning depth.
             Accepted values: ``"low"``, ``"medium"``, ``"high"``.
+        system_prompt:
+            Optional system-level instruction prepended to the conversation
+            before the user turn.  Pass ``None`` to omit the system message
+            and rely on the provider's built-in defaults.
 
         Returns
         -------
@@ -167,7 +172,12 @@ class LLMClient:
         """
         self._provider.validate_config()
 
-        payload = self._provider.build_request(prompt, image_data, reasoning_effort)
+        payload = self._provider.build_request(
+            prompt,
+            image_data,
+            reasoning_effort,
+            system_prompt,
+        )
         url = self._build_url()
         headers = self._build_headers()
 
@@ -206,6 +216,7 @@ class LLMClient:
         error_callback: Callable[[Exception], None],
         image_data: Optional[str] = None,
         reasoning_effort: str = "medium",
+        system_prompt: Optional[str] = None,
     ) -> threading.Thread:
         """Send a prompt on a background daemon thread.
 
@@ -227,6 +238,8 @@ class LLMClient:
             Optional base-64-encoded image string.
         reasoning_effort:
             ``"low"``, ``"medium"``, or ``"high"``.
+        system_prompt:
+            Optional system-level instruction.  Pass ``None`` to omit.
 
         Returns
         -------
@@ -240,6 +253,7 @@ class LLMClient:
                     prompt,
                     image_data=image_data,
                     reasoning_effort=reasoning_effort,
+                    system_prompt=system_prompt,
                 )
                 callback(result)
             except Exception as exc:  # noqa: BLE001

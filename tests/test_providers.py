@@ -83,6 +83,34 @@ class TestOllamaProvider:
         assert "images" in payload["messages"][0]
         assert payload["messages"][0]["images"] == ["base64abc=="]
 
+    # --- system_prompt in build_request ---
+
+    def test_ollama_build_request_with_system_prompt(self) -> None:
+        """When system_prompt is non-empty, a role=system message is prepended."""
+        provider = self._make_provider()
+        payload = provider.build_request("user text", system_prompt="You are a helper.")
+
+        assert len(payload["messages"]) == 2
+        assert payload["messages"][0] == {"role": "system", "content": "You are a helper."}
+        assert payload["messages"][1]["role"] == "user"
+        assert payload["messages"][1]["content"] == "user text"
+
+    def test_ollama_build_request_without_system_prompt(self) -> None:
+        """When system_prompt is absent, only the user message is present."""
+        provider = self._make_provider()
+        payload = provider.build_request("user text")
+
+        assert len(payload["messages"]) == 1
+        assert payload["messages"][0]["role"] == "user"
+
+    def test_ollama_build_request_empty_system_prompt_omits_system_message(self) -> None:
+        """When system_prompt is an empty string, no system message is added."""
+        provider = self._make_provider()
+        payload = provider.build_request("user text", system_prompt="")
+
+        assert len(payload["messages"]) == 1
+        assert payload["messages"][0]["role"] == "user"
+
     # --- effort → temperature mapping ---
 
     def test_ollama_effort_temperature_mapping(self) -> None:
@@ -207,6 +235,34 @@ class TestOpenAICompatibleProvider:
         assert content[1]["type"] == "image_url"
         assert "imgbase64==" in content[1]["image_url"]["url"]
 
+    # --- system_prompt in build_request ---
+
+    def test_openai_build_request_with_system_prompt(self) -> None:
+        """When system_prompt is non-empty, a role=system message is prepended."""
+        provider = self._make_provider()
+        payload = provider.build_request("user text", system_prompt="Be concise.")
+
+        assert len(payload["messages"]) == 2
+        assert payload["messages"][0] == {"role": "system", "content": "Be concise."}
+        assert payload["messages"][1]["role"] == "user"
+        assert payload["messages"][1]["content"] == "user text"
+
+    def test_openai_build_request_without_system_prompt(self) -> None:
+        """When system_prompt is absent, only the user message is present."""
+        provider = self._make_provider()
+        payload = provider.build_request("user text")
+
+        assert len(payload["messages"]) == 1
+        assert payload["messages"][0]["role"] == "user"
+
+    def test_openai_build_request_empty_system_prompt_omits_system_message(self) -> None:
+        """When system_prompt is an empty string, no system message is added."""
+        provider = self._make_provider()
+        payload = provider.build_request("user text", system_prompt="")
+
+        assert len(payload["messages"]) == 1
+        assert payload["messages"][0]["role"] == "user"
+
 
 # ===========================================================================
 # GeminiProvider tests
@@ -275,6 +331,30 @@ class TestGeminiProvider:
         assert "gemini-2.0-flash-thinking-exp" in url
         assert "?key=" in url
         assert "my-secret-key" in url
+
+    # --- system_prompt in build_request ---
+
+    def test_gemini_build_request_with_system_prompt(self) -> None:
+        """When system_prompt is non-empty, systemInstruction is set."""
+        provider = self._make_provider()
+        payload = provider.build_request("user text", system_prompt="You are helpful.")
+
+        assert "systemInstruction" in payload
+        assert payload["systemInstruction"]["parts"][0]["text"] == "You are helpful."
+
+    def test_gemini_build_request_without_system_prompt(self) -> None:
+        """When system_prompt is absent, systemInstruction is not present."""
+        provider = self._make_provider()
+        payload = provider.build_request("user text")
+
+        assert "systemInstruction" not in payload
+
+    def test_gemini_build_request_empty_system_prompt_omits_system_instruction(self) -> None:
+        """When system_prompt is an empty string, systemInstruction is not added."""
+        provider = self._make_provider()
+        payload = provider.build_request("user text", system_prompt="")
+
+        assert "systemInstruction" not in payload
 
 
 # ===========================================================================

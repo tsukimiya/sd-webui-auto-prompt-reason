@@ -137,7 +137,7 @@ class TestAutoPromptReasonRun:
         with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
             ext = AutoPromptReason()
             p = _make_processing_obj()
-            result = ext.run(p, False, "ollama", "m", "http://localhost", "", "medium", "q")
+            result = ext.run(p, False, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert result is None
         mock_client_class.create.assert_not_called()
 
@@ -147,7 +147,7 @@ class TestAutoPromptReasonRun:
         with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
             ext = AutoPromptReason()
             p = _make_processing_obj("unchanged")
-            ext.run(p, False, "ollama", "m", "http://localhost", "", "medium", "q")
+            ext.run(p, False, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert p.prompt == "unchanged"
 
     # ------------------------------------------------------------------
@@ -161,7 +161,7 @@ class TestAutoPromptReasonRun:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
                 ext = AutoPromptReason()
                 p = _make_processing_obj("original")
-                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert p.prompt == "original, fluffy cat"
 
     def test_run_prepend_mode_modifies_prompt(self) -> None:
@@ -174,7 +174,7 @@ class TestAutoPromptReasonRun:
                 with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                     ext = AutoPromptReason()
                     p = _make_processing_obj("original")
-                    ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+                    ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert p.prompt == "fluffy cat, original"
 
     def test_run_replace_mode_modifies_prompt(self) -> None:
@@ -187,7 +187,7 @@ class TestAutoPromptReasonRun:
                 with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                     ext = AutoPromptReason()
                     p = _make_processing_obj("original")
-                    ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+                    ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert p.prompt == "fluffy cat"
 
     # ------------------------------------------------------------------
@@ -201,7 +201,7 @@ class TestAutoPromptReasonRun:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
                 ext = AutoPromptReason()
                 p = _make_processing_obj()
-                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert ext._last_response is not None
         assert ext._last_response.final_answer == "fluffy cat"
 
@@ -212,7 +212,7 @@ class TestAutoPromptReasonRun:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
                 ext = AutoPromptReason()
                 p = _make_processing_obj()
-                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert len(ext._history) == 1
 
     def test_run_multiple_calls_accumulate_history(self) -> None:
@@ -222,9 +222,9 @@ class TestAutoPromptReasonRun:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
                 ext = AutoPromptReason()
                 p = _make_processing_obj()
-                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
                 p2 = _make_processing_obj()
-                ext.run(p2, True, "ollama", "m", "http://localhost", "", "medium", "q")
+                ext.run(p2, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert len(ext._history) == 2
 
     # ------------------------------------------------------------------
@@ -239,7 +239,7 @@ class TestAutoPromptReasonRun:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
                 ext = AutoPromptReason()
                 p = _make_processing_obj()
-                ext.run(p, True, "ollama", "m", "http://localhost", "secret-key", "medium", "q")
+                ext.run(p, True, "ollama", "m", "http://localhost", "secret-key", "medium", "q", "")
         _call_kwargs = mock_client_class.create.call_args
         assert _call_kwargs is not None
         assert "api_key" in _call_kwargs.kwargs
@@ -252,7 +252,7 @@ class TestAutoPromptReasonRun:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
                 ext = AutoPromptReason()
                 p = _make_processing_obj()
-                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         _call_kwargs = mock_client_class.create.call_args
         assert _call_kwargs is not None
         assert "api_key" not in _call_kwargs.kwargs
@@ -270,7 +270,7 @@ class TestAutoPromptReasonRun:
         with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
             ext = AutoPromptReason()
             p = _make_processing_obj("unchanged")
-            result = ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+            result = ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert result is None
 
     def test_run_exception_leaves_prompt_unchanged(self) -> None:
@@ -282,7 +282,7 @@ class TestAutoPromptReasonRun:
         with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
             ext = AutoPromptReason()
             p = _make_processing_obj("unchanged")
-            ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+            ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert p.prompt == "unchanged"
 
     def test_run_exception_last_response_remains_none(self) -> None:
@@ -294,7 +294,7 @@ class TestAutoPromptReasonRun:
         with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
             ext = AutoPromptReason()
             p = _make_processing_obj()
-            ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q")
+            ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
         assert ext._last_response is None
 
 
@@ -312,7 +312,7 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append"}
+        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
 
     def test_config_with_prepend_mode(self) -> None:
         """Valid config.yaml with ``ui.prompt_injection_mode: prepend`` is respected."""
@@ -322,7 +322,7 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "prepend"}
+        assert config == {"prompt_injection": "prepend", "default_system_prompt": ""}
 
     def test_config_with_replace_mode(self) -> None:
         """Valid config.yaml with ``ui.prompt_injection_mode: replace`` is respected."""
@@ -332,7 +332,7 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "replace"}
+        assert config == {"prompt_injection": "replace", "default_system_prompt": ""}
 
     def test_config_with_append_mode_explicit(self) -> None:
         """Explicit ``append`` in config.yaml returns append mode."""
@@ -342,7 +342,7 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append"}
+        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
 
     def test_invalid_yaml_returns_default(self) -> None:
         """Malformed YAML in config.yaml → falls back to default ``append``."""
@@ -356,7 +356,7 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append"}
+        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
 
     def test_config_non_dict_root_returns_default(self) -> None:
         """YAML that parses to a non-dict (e.g. a list) → default is returned."""
@@ -366,7 +366,7 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append"}
+        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
 
     def test_config_missing_ui_section_returns_default(self) -> None:
         """Config with no ``ui`` section → default append mode."""
@@ -376,4 +376,70 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append"}
+        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
+
+
+# ---------------------------------------------------------------------------
+# TestAutoPromptReasonSystemPrompt
+# ---------------------------------------------------------------------------
+
+
+class TestAutoPromptReasonSystemPrompt:
+    """Tests for system_prompt forwarding through AutoPromptReason.run.
+
+    These tests verify that ``run`` passes ``system_prompt`` to
+    ``LLMClient.generate`` once the parallel UI/client plumbing is in place.
+    They use a mock client to inspect the arguments that ``generate`` receives.
+    """
+
+    def test_run_generate_called_with_prompt_and_effort(self) -> None:
+        """``generate`` receives user_prompt and reasoning_effort from ``run``."""
+        mock_client_class, mock_instance = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                ext.run(p, True, "ollama", "m", "http://localhost", "", "high", "my prompt", "")
+        call_args = mock_instance.generate.call_args
+        assert call_args is not None
+        # user_prompt is the first positional argument
+        assert call_args.args[0] == "my prompt"
+        # reasoning_effort is forwarded as a kwarg
+        assert call_args.kwargs.get("reasoning_effort") == "high"
+
+    def test_run_generate_called_once_per_run(self) -> None:
+        """``generate`` is called exactly once per ``run`` invocation."""
+        mock_client_class, mock_instance = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
+        mock_instance.generate.assert_called_once()
+
+    def test_run_nonempty_system_prompt_forwarded_to_generate(self) -> None:
+        """Non-empty system_prompt is forwarded to ``generate`` as a kwarg."""
+        mock_client_class, mock_instance = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                ext.run(
+                    p, True, "ollama", "m", "http://localhost", "", "medium",
+                    "my prompt", "You are an artist.",
+                )
+        call_args = mock_instance.generate.call_args
+        assert call_args is not None
+        assert call_args.kwargs.get("system_prompt") == "You are an artist."
+
+    def test_run_empty_system_prompt_passes_none_to_generate(self) -> None:
+        """Empty system_prompt string results in ``None`` being forwarded to ``generate``."""
+        mock_client_class, mock_instance = _patch_llm()
+        with patch("scripts.auto_prompt_reason.LLMClient", mock_client_class):
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tempfile.mkdtemp())):
+                ext = AutoPromptReason()
+                p = _make_processing_obj()
+                ext.run(p, True, "ollama", "m", "http://localhost", "", "medium", "q", "")
+        call_args = mock_instance.generate.call_args
+        assert call_args is not None
+        assert call_args.kwargs.get("system_prompt") is None

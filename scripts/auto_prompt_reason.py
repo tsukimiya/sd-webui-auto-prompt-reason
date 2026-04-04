@@ -119,9 +119,12 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
         list
             Ordered list of Gradio components:
             ``[enabled, provider_type, model_name, base_url, api_key,
-            reasoning_effort, user_prompt, thinking_textbox,
+            reasoning_effort, user_prompt, system_prompt, thinking_textbox,
             total_tokens_box, gen_time_box, provider_model_box]``
         """
+        config = self._load_config()
+        default_system_prompt: str = config.get("default_system_prompt", "")
+
         _gr = gr  # capture module reference; avoids repeated None checks
         with _gr.Group():  # type: ignore[union-attr]
             with _gr.Accordion("Auto Prompt Reason", open=False):  # type: ignore[union-attr]
@@ -158,6 +161,12 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                     lines=3,
                     placeholder="Describe the image you want to generate...",
                 )
+                system_prompt = _gr.Textbox(  # type: ignore[union-attr]
+                    value=default_system_prompt,
+                    label="System Prompt",
+                    lines=4,
+                    placeholder=default_system_prompt,
+                )
 
                 # Display components — populated by postprocess() after generation
                 _accordion, thinking_textbox = build_thinking_display(visible=True)
@@ -171,6 +180,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             api_key,
             reasoning_effort,
             user_prompt,
+            system_prompt,
             thinking_textbox,
             total_tokens_box,
             gen_time_box,
@@ -187,6 +197,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
         api_key: str,
         reasoning_effort: str,
         user_prompt: str,
+        system_prompt: str,
         *_: Any,
     ) -> None:
         """Enhance the prompt via LLM and inject the result into *p*.
@@ -214,6 +225,9 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             Reasoning depth hint — ``"low"``, ``"medium"``, or ``"high"``.
         user_prompt:
             The text prompt sent to the LLM.
+        system_prompt:
+            System-level instruction for the LLM.  Empty string is treated as
+            ``None`` (no system message).
         *_:
             Absorbs display-only args from ui() (thinking_textbox,
             total_tokens_box, gen_time_box, provider_model_box); ignored by
@@ -251,9 +265,14 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 reasoning_effort,
             )
 
+            # Treat empty string as "no system prompt" so the provider falls
+            # back to its own defaults.
+            effective_system_prompt: Optional[str] = system_prompt or None
+
             response: ReasoningResponse = client.generate(
                 user_prompt,
                 reasoning_effort=reasoning_effort,
+                system_prompt=effective_system_prompt,
             )
 
             # Persist response for potential use by postprocess().
@@ -332,8 +351,9 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     def _load_config(self) -> dict:
         """Load ``config.yaml`` from the extension root directory.
 
-        Returns a dict with at least the ``prompt_injection`` key.  Falls back
-        to safe defaults if the file is missing or cannot be parsed.
+        Returns a dict with at least the ``prompt_injection`` and
+        ``default_system_prompt`` keys.  Falls back to safe defaults if the
+        file is missing or cannot be parsed.
 
         Returns
         -------
@@ -343,10 +363,16 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             ``prompt_injection``
                 One of ``"append"`` (default), ``"prepend"``, or
                 ``"replace"``.
+            ``default_system_prompt``
+                System prompt string shown as the textbox default value.
+                Empty string when not configured.
         """
         if self._cached_config is not None:
             return self._cached_config
-        defaults: dict[str, Any] = {"prompt_injection": "append"}
+        defaults: dict[str, Any] = {
+            "prompt_injection": "append",
+            "default_system_prompt": "",
+        }
         config_path = _EXTENSION_DIR / "config.yaml"
         if not config_path.exists():
             self._cached_config = defaults
@@ -362,6 +388,8 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             if isinstance(ui_section, dict):
                 mode = ui_section.get("prompt_injection_mode", "append")
                 defaults["prompt_injection"] = mode
+                default_sp = ui_section.get("default_system_prompt", "")
+                defaults["default_system_prompt"] = default_sp if isinstance(default_sp, str) else ""
             self._cached_config = defaults
             return self._cached_config
         except Exception:  # noqa: BLE001

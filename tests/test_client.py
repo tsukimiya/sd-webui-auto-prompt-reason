@@ -219,7 +219,7 @@ class TestLLMClientGenerate:
         with patch("modules.llm_client.requests.post") as mock_post:
             mock_post.return_value = _make_mock_response()
             client.generate("test prompt", reasoning_effort="high")
-        mock_provider.build_request.assert_called_once_with("test prompt", None, "high")
+        mock_provider.build_request.assert_called_once_with("test prompt", None, "high", None)
 
     def test_generate_final_answer_matches_provider_parse(self) -> None:
         """The ``final_answer`` in the result matches what the provider parses."""
@@ -440,3 +440,81 @@ class TestBuildHeaders:
         client = LLMClient.create("gemini", api_key=SecretStr("gemini-key"))
         headers = client._build_headers()
         assert "Authorization" not in headers
+
+
+# ===========================================================================
+# TestLLMClientSystemPromptForwarding
+# ===========================================================================
+
+
+class TestLLMClientSystemPromptForwarding:
+    """Tests that ``system_prompt`` is accepted by provider ``build_request`` methods.
+
+    These tests use the real provider objects (accessed through the client's
+    ``_provider``) to verify that the ``system_prompt`` kwarg produces the
+    correct payload shape for each backend.
+    """
+
+    # --- Ollama ---
+
+    def test_ollama_build_request_system_prompt_via_provider(self) -> None:
+        """Ollama provider inside client accepts system_prompt in build_request."""
+        client = LLMClient.create("ollama", model_name="llama3.2:latest")
+        payload = client._provider.build_request(
+            "describe this",
+            system_prompt="You are an artist.",
+        )
+        assert payload["messages"][0] == {"role": "system", "content": "You are an artist."}
+        assert payload["messages"][1]["role"] == "user"
+
+    def test_ollama_build_request_no_system_prompt_via_provider(self) -> None:
+        """Ollama provider inside client omits system message when system_prompt is None."""
+        client = LLMClient.create("ollama", model_name="llama3.2:latest")
+        payload = client._provider.build_request("describe this")
+        assert len(payload["messages"]) == 1
+        assert payload["messages"][0]["role"] == "user"
+
+    # --- OpenAI-compatible ---
+
+    def test_openai_build_request_system_prompt_via_provider(self) -> None:
+        """OpenAI provider inside client accepts system_prompt in build_request."""
+        client = LLMClient.create(
+            "openai_compatible",
+            base_url="http://localhost:1234/v1",
+            model_name="mistral-7b",
+        )
+        payload = client._provider.build_request(
+            "describe this",
+            system_prompt="Be brief.",
+        )
+        assert payload["messages"][0] == {"role": "system", "content": "Be brief."}
+        assert payload["messages"][1]["role"] == "user"
+
+    def test_openai_build_request_no_system_prompt_via_provider(self) -> None:
+        """OpenAI provider inside client omits system message when system_prompt is None."""
+        client = LLMClient.create(
+            "openai_compatible",
+            base_url="http://localhost:1234/v1",
+            model_name="mistral-7b",
+        )
+        payload = client._provider.build_request("describe this")
+        assert len(payload["messages"]) == 1
+        assert payload["messages"][0]["role"] == "user"
+
+    # --- Gemini ---
+
+    def test_gemini_build_request_system_prompt_via_provider(self) -> None:
+        """Gemini provider inside client accepts system_prompt in build_request."""
+        client = LLMClient.create("gemini", api_key=SecretStr("key"))
+        payload = client._provider.build_request(
+            "describe this",
+            system_prompt="Respond in JSON.",
+        )
+        assert "systemInstruction" in payload
+        assert payload["systemInstruction"]["parts"][0]["text"] == "Respond in JSON."
+
+    def test_gemini_build_request_no_system_prompt_via_provider(self) -> None:
+        """Gemini provider inside client omits systemInstruction when system_prompt is None."""
+        client = LLMClient.create("gemini", api_key=SecretStr("key"))
+        payload = client._provider.build_request("describe this")
+        assert "systemInstruction" not in payload

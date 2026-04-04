@@ -117,6 +117,7 @@ class OllamaProvider(BaseProvider):
         prompt: str,
         image_data: Optional[str] = None,
         reasoning_effort: str = "medium",
+        system_prompt: Optional[str] = None,
     ) -> dict:
         """Build an Ollama ``/api/chat`` request payload.
 
@@ -130,6 +131,9 @@ class OllamaProvider(BaseProvider):
         reasoning_effort:
             One of ``"low"``, ``"medium"``, or ``"high"``.  Controls the
             sampling temperature sent to the model.
+        system_prompt:
+            Optional system-level instruction.  When non-empty, a
+            ``{"role": "system", …}`` message is prepended to ``messages``.
 
         Returns
         -------
@@ -140,9 +144,14 @@ class OllamaProvider(BaseProvider):
         if image_data is not None:
             message["images"] = [image_data]
 
+        messages: list[dict[str, Any]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append(message)
+
         return {
             "model": self.model_name,
-            "messages": [message],
+            "messages": messages,
             "stream": False,
             "options": {
                 "temperature": self._effort_to_temperature(reasoning_effort),

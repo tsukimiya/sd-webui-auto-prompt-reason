@@ -74,6 +74,7 @@ class GeminiProvider(BaseProvider):
         prompt: str,
         image_data: Optional[str] = None,
         reasoning_effort: str = "medium",
+        system_prompt: Optional[str] = None,
     ) -> dict:
         """Construct the Gemini ``generateContent`` request body.
 
@@ -86,6 +87,10 @@ class GeminiProvider(BaseProvider):
         reasoning_effort:
             ``"low"``, ``"medium"``, or ``"high"`` — maps to a thinking
             budget token count.
+        system_prompt:
+            Optional system-level instruction.  When non-empty, a top-level
+            ``systemInstruction`` field is added with a single ``parts[0].text``
+            entry.
 
         Returns
         -------
@@ -105,7 +110,7 @@ class GeminiProvider(BaseProvider):
                 }
             )
 
-        return {
+        payload: dict = {
             "contents": [
                 {
                     "role": "user",
@@ -120,6 +125,13 @@ class GeminiProvider(BaseProvider):
                 },
             },
         }
+
+        if system_prompt:
+            payload["systemInstruction"] = {
+                "parts": [{"text": system_prompt}],
+            }
+
+        return payload
 
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
         """Parse a Gemini ``generateContent`` response into a :class:`ReasoningResponse`.
