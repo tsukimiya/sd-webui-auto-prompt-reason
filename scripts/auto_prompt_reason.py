@@ -35,13 +35,8 @@ from apr_modules.ui_components import build_thinking_display, build_metrics_disp
 # SD WebUI / Gradio — only available at runtime inside AUTOMATIC1111
 # ---------------------------------------------------------------------------
 
-try:
-    import modules.scripts as scripts
-    import gradio as gr
-except ImportError:
-    # Test / development environment fallback — the class is still importable.
-    scripts = None  # type: ignore[assignment]
-    gr = None  # type: ignore[assignment]
+import modules.scripts as scripts
+import gradio as gr
 
 _log = logging.getLogger(__name__)
 
@@ -56,7 +51,7 @@ _EXTENSION_DIR = Path(__file__).resolve().parent.parent
 # Script class
 # ---------------------------------------------------------------------------
 
-_BaseClass = scripts.Script if scripts is not None else object
+_BaseClass = scripts.Script
 
 
 class AutoPromptReason(_BaseClass):  # type: ignore[misc,valid-type]
