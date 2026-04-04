@@ -24,6 +24,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch, call
 
 import pytest  # type: ignore[import-untyped]
+import requests
 
 from apr_modules.llm_client import LLMClient  # type: ignore[import]
 from apr_modules.llm_client import (  # type: ignore[import]
@@ -68,6 +69,14 @@ def _make_mock_response(
 def _make_ollama_client(model_name: str = "qwen3.5:7b") -> LLMClient:
     """Return a real :class:`LLMClient` backed by an :class:`OllamaProvider`."""
     return LLMClient.create("ollama", model_name=model_name)
+
+
+def _make_ollama_client_with_timeout(
+    model_name: str = "qwen3.5:7b",
+    timeout: tuple[int, int] = (10, 180),
+) -> LLMClient:
+    """Return a real :class:`LLMClient` with an explicit timeout override."""
+    return LLMClient.create("ollama", model_name=model_name, timeout=timeout)
 
 
 def _make_openai_client(base_url: str = "http://localhost:1234/v1") -> LLMClient:
@@ -862,6 +871,62 @@ class TestLogging:
             logger.setLevel(old_level)
 
         assert any("[REQUEST FAILED]" in msg for msg in captured)
+
+    def test_request_timeout_logged_with_url_and_timeout(self) -> None:
+        """``[REQUEST TIMEOUT]`` includes URL and timeout details."""
+        client = _make_ollama_client_with_timeout(timeout=(10, 180))
+        captured: list[str] = []
+
+        class _Handler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(self.format(record))
+
+        logger = logging.getLogger("apr_modules.llm_client")
+        handler = _Handler()
+        handler.setLevel(logging.DEBUG)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        try:
+            with patch(_PATCH_REQUESTS) as mock_post:
+                mock_post.side_effect = requests.ReadTimeout("read timed out")
+                with pytest.raises(requests.ReadTimeout):
+                    client.generate("test prompt")
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        timeout_log = next(msg for msg in captured if "[REQUEST TIMEOUT]" in msg)
+        assert "url=http://localhost:11434/api/chat" in timeout_log
+        assert "timeout=(10, 180)" in timeout_log
+
+    def test_request_failed_log_includes_timeout_metadata(self) -> None:
+        """Generic request failures include URL and timeout metadata."""
+        client = _make_ollama_client_with_timeout(timeout=(10, 180))
+        captured: list[str] = []
+
+        class _Handler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(self.format(record))
+
+        logger = logging.getLogger("apr_modules.llm_client")
+        handler = _Handler()
+        handler.setLevel(logging.DEBUG)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        try:
+            with patch(_PATCH_REQUESTS) as mock_post:
+                mock_post.side_effect = requests.ConnectionError("refused")
+                with pytest.raises(requests.ConnectionError):
+                    client.generate("test prompt")
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        failed_log = next(msg for msg in captured if "[REQUEST FAILED]" in msg)
+        assert "url=http://localhost:11434/api/chat" in failed_log
+        assert "timeout=(10, 180)" in failed_log
 
     # --- provider / model metadata in logs ---
 

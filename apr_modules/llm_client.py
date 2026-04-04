@@ -30,7 +30,8 @@ visible:
    ``Authorization`` header value is never logged.
 4. ``[RESPONSE RECEIVED]`` — HTTP status code and elapsed time logged.
 5. ``[JSON PARSED]``       — top-level keys of the parsed JSON body logged.
-6. ``[REQUEST FAILED]``    — status code (if HTTP) or exception type for any
+6. ``[REQUEST TIMEOUT]``   — explicit timeout log including URL and timeout.
+7. ``[REQUEST FAILED]``    — status code (if HTTP) or exception type for any
    failure; also logged from the async worker wrapper.
 
 None of these messages include raw API keys, raw Authorization header values,
@@ -429,14 +430,39 @@ class LLMClient:
                 exc,
             )
             raise
+        except requests.ReadTimeout as exc:
+            elapsed_ms = int((time.time() - start) * 1000)
+            self._logger.warning(
+                "[REQUEST TIMEOUT] provider=%s model=%s url=%s timeout=%s "
+                "elapsed_ms=%d error=%s",
+                provider_name,
+                model_name,
+                _redact_url(url),
+                self._provider.timeout,
+                elapsed_ms,
+                exc,
+            )
+            self._logger.debug(
+                "[REQUEST FAILED] provider=%s model=%s reason=ReadTimeout "
+                "url=%s timeout=%s elapsed_ms=%d error=%s",
+                provider_name,
+                model_name,
+                _redact_url(url),
+                self._provider.timeout,
+                elapsed_ms,
+                exc,
+            )
+            raise
         except requests.RequestException as exc:
             elapsed_ms = int((time.time() - start) * 1000)
             self._logger.debug(
                 "[REQUEST FAILED] provider=%s model=%s reason=%s "
-                "elapsed_ms=%d error=%s",
+                "url=%s timeout=%s elapsed_ms=%d error=%s",
                 provider_name,
                 model_name,
                 type(exc).__name__,
+                _redact_url(url),
+                self._provider.timeout,
                 elapsed_ms,
                 exc,
             )
