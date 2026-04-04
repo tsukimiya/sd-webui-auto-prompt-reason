@@ -1,0 +1,9 @@
+{
+  "extraPaths": [
+    "E:/Documents/Projects/vscode/new_project/sd-webui-auto-prompt-reason"
+  ],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingModuleSource": "none",
+  "reportMissingImports": "none"
+}

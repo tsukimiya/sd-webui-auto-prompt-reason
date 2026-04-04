@@ -1,0 +1,23 @@
+# sd-webui-auto-prompt-reason default configuration
+default_provider: ollama
+ollama:
+  base_url: "http://localhost:11434"
+  model: "qwen2.5:7b"
+  timeout: 60
+openai_compatible:
+  base_url: "http://localhost:1234/v1"
+  model: ""
+  timeout: 60
+gemini:
+  base_url: "https://generativelanguage.googleapis.com/v1"
+  model: "gemini-2.0-flash"
+  timeout: 60
+reasoning:
+  effort: "medium"
+  show_thinking: true
+  max_reasoning_tokens: 8192
+  max_completion_tokens: 2048
+history:
+  max_size: 50
+ui:
+  prompt_injection_mode: "append"

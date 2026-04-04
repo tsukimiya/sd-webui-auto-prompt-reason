@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short -v"
+
+[tool.coverage.run]
+source = ["modules", "scripts"]
+omit = ["tests/*", "*/conftest.py"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
