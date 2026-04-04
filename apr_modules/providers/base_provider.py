@@ -20,7 +20,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from apr_modules.models.reasoning_response import ReasoningResponse
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +194,7 @@ class BaseProvider(ABC):
         prompt: str,
         image_data: Optional[str] = None,
         reasoning_effort: str = "medium",
+        system_prompt: Optional[str] = None,
     ) -> dict:
         """Construct the provider-specific HTTP request payload.
 
@@ -204,6 +208,10 @@ class BaseProvider(ABC):
         reasoning_effort:
             Hint for models that support variable reasoning depth.
             Typical values are ``"low"``, ``"medium"``, and ``"high"``.
+        system_prompt:
+            Optional system-level instruction prepended to the conversation
+            before the user turn.  Pass ``None`` to omit the system message
+            entirely and rely on the provider's built-in defaults.
 
         Returns
         -------

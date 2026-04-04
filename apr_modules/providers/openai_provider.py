@@ -79,6 +79,7 @@ class OpenAICompatibleProvider(BaseProvider):
         prompt: str,
         image_data: Optional[str] = None,
         reasoning_effort: str = "medium",
+        system_prompt: Optional[str] = None,
     ) -> dict:
         """Build the JSON payload for ``POST /v1/chat/completions``.
 
@@ -92,6 +93,9 @@ class OpenAICompatibleProvider(BaseProvider):
         reasoning_effort:
             Controls the ``temperature`` via :py:meth:`_effort_to_temperature`.
             Accepted values: ``"low"``, ``"medium"``, ``"high"``.
+        system_prompt:
+            Optional system-level instruction.  When non-empty, a
+            ``{"role": "system", …}`` message is prepended to ``messages``.
 
         Returns
         -------
@@ -109,11 +113,14 @@ class OpenAICompatibleProvider(BaseProvider):
         else:
             content = prompt  # type: ignore[assignment]
 
+        messages: list[dict] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": content})
+
         return {
             "model": self.model_name,
-            "messages": [
-                {"role": "user", "content": content},
-            ],
+            "messages": messages,
             "max_tokens": 2048,
             "temperature": self._effort_to_temperature(reasoning_effort),
         }
