@@ -409,7 +409,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _load_config(self) -> dict:
+    def _load_config(self, provider_type: str = "ollama") -> dict:
         """Load ``config.yaml`` from the extension root directory.
 
         Returns a dict with at least the ``prompt_injection``,
@@ -455,10 +455,12 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 defaults["prompt_injection"] = mode
                 default_sp = ui_section.get("default_system_prompt", "")
                 defaults["default_system_prompt"] = default_sp if isinstance(default_sp, str) else ""
-            provider_section = raw.get("ollama", {})
+            provider_section = raw.get(provider_type, {})
             if isinstance(provider_section, dict):
                 timeout_value = provider_section.get("timeout")
-                if isinstance(timeout_value, (int, float)) and timeout_value > 0:
+                if timeout_value is None:
+                    defaults["provider_timeout"] = (10, None)
+                elif isinstance(timeout_value, (int, float)) and timeout_value > 0:
                     defaults["provider_timeout"] = (10, int(timeout_value))
             self._cached_config = defaults
             return self._cached_config

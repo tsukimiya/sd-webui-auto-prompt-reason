@@ -321,7 +321,7 @@ class TestAutoPromptReasonLoadConfig:
         assert config == {
             "prompt_injection": "append",
             "default_system_prompt": "",
-            "provider_timeout": (10, 180),
+            "provider_timeout": (10, None),
         }
 
     def test_config_with_prepend_mode(self) -> None:
@@ -331,7 +331,7 @@ class TestAutoPromptReasonLoadConfig:
             config_path.write_text("ui:\n  prompt_injection_mode: prepend\nollama:\n  timeout: 240\n", encoding="utf-8")
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
-                config = ext._load_config()
+                config = ext._load_config("ollama")
         assert config == {
             "prompt_injection": "prepend",
             "default_system_prompt": "",
@@ -349,7 +349,7 @@ class TestAutoPromptReasonLoadConfig:
         assert config == {
             "prompt_injection": "replace",
             "default_system_prompt": "",
-            "provider_timeout": (10, 180),
+            "provider_timeout": (10, None),
         }
 
     def test_config_with_append_mode_explicit(self) -> None:
@@ -363,7 +363,7 @@ class TestAutoPromptReasonLoadConfig:
         assert config == {
             "prompt_injection": "append",
             "default_system_prompt": "",
-            "provider_timeout": (10, 180),
+            "provider_timeout": (10, None),
         }
 
     def test_invalid_yaml_returns_default(self) -> None:
@@ -381,7 +381,7 @@ class TestAutoPromptReasonLoadConfig:
         assert config == {
             "prompt_injection": "append",
             "default_system_prompt": "",
-            "provider_timeout": (10, 180),
+            "provider_timeout": (10, None),
         }
 
     def test_config_non_dict_root_returns_default(self) -> None:
@@ -395,7 +395,7 @@ class TestAutoPromptReasonLoadConfig:
         assert config == {
             "prompt_injection": "append",
             "default_system_prompt": "",
-            "provider_timeout": (10, 180),
+            "provider_timeout": (10, None),
         }
 
     def test_config_missing_ui_section_returns_default(self) -> None:
@@ -409,7 +409,38 @@ class TestAutoPromptReasonLoadConfig:
         assert config == {
             "prompt_injection": "append",
             "default_system_prompt": "",
-            "provider_timeout": (10, 180),
+            "provider_timeout": (10, None),
+        }
+
+    def test_config_uses_provider_specific_timeout_section(self) -> None:
+        """Requested provider section determines the loaded timeout."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text(
+                "ollama:\n  timeout: 240\nopenai_compatible:\n  timeout: 360\n",
+                encoding="utf-8",
+            )
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
+                ext = AutoPromptReason()
+                config = ext._load_config("openai_compatible")
+        assert config == {
+            "prompt_injection": "append",
+            "default_system_prompt": "",
+            "provider_timeout": (10, 360),
+        }
+
+    def test_config_with_null_timeout_disables_read_timeout(self) -> None:
+        """``timeout: null`` disables the read-timeout portion."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.yaml"
+            config_path.write_text("ollama:\n  timeout: null\n", encoding="utf-8")
+            with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
+                ext = AutoPromptReason()
+                config = ext._load_config("ollama")
+        assert config == {
+            "prompt_injection": "append",
+            "default_system_prompt": "",
+            "provider_timeout": (10, None),
         }
 
 
