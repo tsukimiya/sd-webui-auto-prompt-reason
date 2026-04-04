@@ -153,22 +153,21 @@ class OllamaProvider(BaseProvider):
             "model": self.model_name,
             "messages": messages,
             "stream": False,
-            "options": {
-                "temperature": self._effort_to_temperature(reasoning_effort),
-                "num_predict": 2048,
-            },
+            "temperature": self._effort_to_temperature(reasoning_effort),
+            "max_tokens": 2048,
         }
 
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
         """Parse an Ollama API response into a :class:`ReasoningResponse`.
 
-        Handles both Shape A (``thinking`` field) and Shape B (``<think…``
-        tags embedded in ``content``).
+        Handles both Shape A (``thinking`` field) and Shape B (``<think>``
+        tags embedded in ``content``). Uses the OpenAI-compatible
+        ``/v1/chat/completions`` response format (``choices[0].message.content``).
 
         Parameters
         ----------
         raw_response:
-            Deserialised JSON body from the Ollama ``/api/chat`` endpoint.
+            Deserialised JSON body from the Ollama ``/v1/chat/completions`` endpoint.
 
         Returns
         -------
@@ -176,16 +175,26 @@ class OllamaProvider(BaseProvider):
             Normalised provider-agnostic response.
         """
         # --- 診断ログ: 生レスポンス構造の確認 ---
-        message: dict[str, Any] = raw_response.get("message", {})
+        # OpenAI互換形式: choices[0].message.content
+        choices: list = raw_response.get("choices", [])
+        message: dict[str, Any] = choices[0].get("message", {}) if choices else {}
         content: str = message.get("content", "")
         logger.debug(
-            "parse_response: raw keys=%s message_keys=%s content_len=%d"
+            "parse_response: raw keys=%s choices_len=%d message_keys=%s content_len=%d"
             " has_thinking_field=%s",
             sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
+            len(choices),
             sorted(message.keys()) if isinstance(message, dict) else type(message).__name__,
             len(content),
             "thinking" in message,
         )
+
+        if not choices:
+            logger.warning(
+                "parse_response: 'choices' field missing or empty — "
+                "raw_keys=%s  (wrong endpoint or unexpected response format?)",
+                sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
+            )
 
         thinking_content: Optional[str] = None
         final_answer: str = content
@@ -213,8 +222,10 @@ class OllamaProvider(BaseProvider):
                 final_answer = ""
             # else: no tags — keep thinking_content=None, final_answer=content
 
-        completion_tokens: int = raw_response.get("eval_count", 0)
-        prompt_tokens: int = raw_response.get("prompt_eval_count", 0)
+        # OpenAI互換レスポンスのトークンカウント
+        usage: dict[str, Any] = raw_response.get("usage", {})
+        completion_tokens: int = usage.get("completion_tokens", 0)
+        prompt_tokens: int = usage.get("prompt_tokens", 0)
 
         # --- 診断ログ: パース結果の確認 ---
         logger.info(
