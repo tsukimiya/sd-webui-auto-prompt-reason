@@ -1,6 +1,9 @@
 import sys
 import os
 
+# Save original sys.path to restore later (avoid affecting other extensions)
+original_path = sys.path.copy()
+
 # Fix module path to import from sd_reforge root
 # This ensures we import the correct launch.py from parent directory
 extension_dir = os.path.dirname(os.path.realpath(__file__))
@@ -14,6 +17,9 @@ if extension_dir in sys.path:
 sys.path.insert(0, sd_reforge_dir)
 
 import launch
+
+# Restore original sys.path to avoid affecting other extensions
+sys.path[:] = original_path
 
 
 def check_and_install():
