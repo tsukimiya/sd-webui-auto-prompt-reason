@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import yaml
 
@@ -45,6 +45,7 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _EXTENSION_DIR = Path(__file__).resolve().parent.parent
+_DEFAULT_PROVIDER_TIMEOUT = (10, 180)
 
 
 # ---------------------------------------------------------------------------
@@ -266,26 +267,30 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             # available immediately after the response is received.
             config = self._load_config()
             injection_mode: str = config.get("prompt_injection", "append")
+            provider_timeout = cast(tuple[int, int], config.get("provider_timeout", _DEFAULT_PROVIDER_TIMEOUT))
             _log.debug(
-                "AutoPromptReason.process: config loaded injection_mode=%r",
+                "AutoPromptReason.process: config loaded injection_mode=%r provider_timeout=%r",
                 injection_mode,
+                provider_timeout,
             )
 
             # Build provider kwargs; only pass api_key when non-empty.
             kwargs: dict[str, Any] = {
                 "base_url": base_url,
                 "model_name": model_name,
+                "timeout": provider_timeout,
             }
             if api_key:
                 kwargs["api_key"] = SecretStr(api_key)
 
             _log.debug(
                 "AutoPromptReason.process: creating LLMClient"
-                " provider=%r model=%r base_url=%r has_api_key=%r",
+                " provider=%r model=%r base_url=%r has_api_key=%r timeout=%r",
                 provider_type,
                 model_name,
                 base_url,
                 bool(api_key),
+                provider_timeout,
             )
             client = LLMClient.create(provider_type, **kwargs)
             _log.debug("AutoPromptReason.process: LLMClient.create() returned %r", type(client).__name__)
@@ -352,8 +357,14 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
 
         except Exception:  # noqa: BLE001
             _log.exception(
-                "AutoPromptReason.process: error during LLM generation — "
+                "AutoPromptReason.process: error during LLM generation"
+                " provider=%r model=%r base_url=%r timeout=%r — "
                 "prompt unchanged."
+                ,
+                provider_type,
+                model_name,
+                base_url,
+                provider_timeout if 'provider_timeout' in locals() else _DEFAULT_PROVIDER_TIMEOUT,
             )
 
         return None
@@ -401,8 +412,9 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     def _load_config(self) -> dict:
         """Load ``config.yaml`` from the extension root directory.
 
-        Returns a dict with at least the ``prompt_injection`` and
-        ``default_system_prompt`` keys.  Falls back to safe defaults if the
+        Returns a dict with at least the ``prompt_injection``,
+        ``default_system_prompt``, and ``provider_timeout`` keys. Falls back to
+        safe defaults if the
         file is missing or cannot be parsed.
 
         Returns
@@ -416,12 +428,15 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             ``default_system_prompt``
                 System prompt string shown as the textbox default value.
                 Empty string when not configured.
+            ``provider_timeout``
+                Two-element timeout tuple ``(connect_timeout_s, read_timeout_s)``.
         """
         if self._cached_config is not None:
             return self._cached_config
         defaults: dict[str, Any] = {
             "prompt_injection": "append",
             "default_system_prompt": "",
+            "provider_timeout": _DEFAULT_PROVIDER_TIMEOUT,
         }
         config_path = _EXTENSION_DIR / "config.yaml"
         if not config_path.exists():
@@ -440,6 +455,11 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 defaults["prompt_injection"] = mode
                 default_sp = ui_section.get("default_system_prompt", "")
                 defaults["default_system_prompt"] = default_sp if isinstance(default_sp, str) else ""
+            provider_section = raw.get("ollama", {})
+            if isinstance(provider_section, dict):
+                timeout_value = provider_section.get("timeout")
+                if isinstance(timeout_value, (int, float)) and timeout_value > 0:
+                    defaults["provider_timeout"] = (10, int(timeout_value))
             self._cached_config = defaults
             return self._cached_config
         except Exception:  # noqa: BLE001

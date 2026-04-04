@@ -313,22 +313,30 @@ class TestAutoPromptReasonLoadConfig:
     """Tests for :py:meth:`AutoPromptReason._load_config`."""
 
     def test_no_config_file_returns_default_append(self) -> None:
-        """Missing config.yaml → returns ``{"prompt_injection": "append"}``."""
+        """Missing config.yaml → returns default injection mode and timeout."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
+        assert config == {
+            "prompt_injection": "append",
+            "default_system_prompt": "",
+            "provider_timeout": (10, 180),
+        }
 
     def test_config_with_prepend_mode(self) -> None:
         """Valid config.yaml with ``ui.prompt_injection_mode: prepend`` is respected."""
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"
-            config_path.write_text("ui:\n  prompt_injection_mode: prepend\n", encoding="utf-8")
+            config_path.write_text("ui:\n  prompt_injection_mode: prepend\nollama:\n  timeout: 240\n", encoding="utf-8")
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "prepend", "default_system_prompt": ""}
+        assert config == {
+            "prompt_injection": "prepend",
+            "default_system_prompt": "",
+            "provider_timeout": (10, 240),
+        }
 
     def test_config_with_replace_mode(self) -> None:
         """Valid config.yaml with ``ui.prompt_injection_mode: replace`` is respected."""
@@ -338,7 +346,11 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "replace", "default_system_prompt": ""}
+        assert config == {
+            "prompt_injection": "replace",
+            "default_system_prompt": "",
+            "provider_timeout": (10, 180),
+        }
 
     def test_config_with_append_mode_explicit(self) -> None:
         """Explicit ``append`` in config.yaml returns append mode."""
@@ -348,7 +360,11 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
+        assert config == {
+            "prompt_injection": "append",
+            "default_system_prompt": "",
+            "provider_timeout": (10, 180),
+        }
 
     def test_invalid_yaml_returns_default(self) -> None:
         """Malformed YAML in config.yaml → falls back to default ``append``."""
@@ -362,7 +378,11 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
+        assert config == {
+            "prompt_injection": "append",
+            "default_system_prompt": "",
+            "provider_timeout": (10, 180),
+        }
 
     def test_config_non_dict_root_returns_default(self) -> None:
         """YAML that parses to a non-dict (e.g. a list) → default is returned."""
@@ -372,7 +392,11 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
+        assert config == {
+            "prompt_injection": "append",
+            "default_system_prompt": "",
+            "provider_timeout": (10, 180),
+        }
 
     def test_config_missing_ui_section_returns_default(self) -> None:
         """Config with no ``ui`` section → default append mode."""
@@ -382,7 +406,11 @@ class TestAutoPromptReasonLoadConfig:
             with patch("scripts.auto_prompt_reason._EXTENSION_DIR", Path(tmpdir)):
                 ext = AutoPromptReason()
                 config = ext._load_config()
-        assert config == {"prompt_injection": "append", "default_system_prompt": ""}
+        assert config == {
+            "prompt_injection": "append",
+            "default_system_prompt": "",
+            "provider_timeout": (10, 180),
+        }
 
 
 # ---------------------------------------------------------------------------
