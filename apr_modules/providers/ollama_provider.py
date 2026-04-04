@@ -60,7 +60,7 @@ class OllamaProvider(BaseProvider):
         require authentication; pass ``None`` (the default).
     timeout:
         ``(connect_timeout, read_timeout)`` in seconds.  Defaults to
-        ``(10, 60)``.
+        ``(10, 180)``.
 
     Examples
     --------
@@ -79,7 +79,7 @@ class OllamaProvider(BaseProvider):
         base_url: str = _DEFAULT_BASE_URL,
         model_name: str = "",
         api_key: Optional[SecretStr] = None,
-        timeout: tuple = (10, 60),
+        timeout: tuple = (10, 180),
     ) -> None:
         effective_url = base_url if base_url else _DEFAULT_BASE_URL
         super().__init__(

@@ -147,7 +147,7 @@ class BaseProvider(ABC):
         ``"gemini-2.0-flash-thinking-exp"``.
     timeout:
         ``(connect_timeout, read_timeout)`` in seconds passed to the
-        underlying HTTP client. Defaults to ``(10, 60)``.
+        underlying HTTP client. Defaults to ``(10, 180)``.
 
     Notes
     -----
@@ -163,7 +163,7 @@ class BaseProvider(ABC):
         base_url: str,
         api_key: Optional[SecretStr],
         model_name: str,
-        timeout: tuple = (10, 60),
+        timeout: tuple = (10, 180),
     ) -> None:
         """Initialise shared provider state.
 
