@@ -11,7 +11,7 @@ Design notes
 ------------
 * All SD WebUI and Gradio imports are guarded with ``try/except`` so the module
   can be imported in test environments where those packages are absent.
-* The ``run()`` method is called by SD WebUI on a worker thread — it is safe to
+* The ``process()`` method is called by SD WebUI on a worker thread — it is safe to
   call ``LLMClient.generate()`` synchronously here.
 * No global mutable config state is used; config is loaded once per instance
   and cached via :py:meth:`AutoPromptReason._load_config`.
@@ -60,7 +60,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     * :py:meth:`title` — display name in the UI.
     * :py:meth:`show` — visibility control; always shown in both tabs.
     * :py:meth:`ui` — builds and returns the Gradio component list.
-    * :py:meth:`run` — called just before image generation; injects the LLM
+    * :py:meth:`process` — called just before image generation; injects the LLM
       response into the processing object's ``prompt`` attribute.
     """
 
@@ -107,7 +107,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
         """Build and return the Gradio UI components for this script.
 
         The list order here **must** match the positional ``*args`` order
-        in :py:meth:`run`.
+        in :py:meth:`process`.
 
         Parameters
         ----------
@@ -187,7 +187,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             provider_model_box,
         ]
 
-    def run(
+    def process(
         self,
         p: Any,
         enabled: bool,
@@ -202,9 +202,11 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     ) -> None:
         """Enhance the prompt via LLM and inject the result into *p*.
 
-        Called by SD WebUI just before image generation begins.  The method is
-        invoked on SD WebUI's worker thread so blocking HTTP calls are safe
-        here.
+        Called by SD WebUI just before image generation begins on the worker
+        thread, making it safe to call ``LLMClient.generate()`` synchronously.
+
+        This is the correct always-on pre-generation callback for
+        ``AlwaysVisible`` scripts; ``run()`` is not invoked for such scripts.
 
         Parameters
         ----------
@@ -231,7 +233,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
         *_:
             Absorbs display-only args from ui() (thinking_textbox,
             total_tokens_box, gen_time_box, provider_model_box); ignored by
-            run() — updated in postprocess().
+            process() — updated in postprocess().
 
         Returns
         -------
@@ -240,7 +242,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             the return value.
         """
         _log.debug(
-            "AutoPromptReason.run: invoked enabled=%r provider=%r model=%r"
+            "AutoPromptReason.process: invoked enabled=%r provider=%r model=%r"
             " effort=%r base_url=%r has_api_key=%r"
             " user_prompt_len=%d has_system_prompt=%r",
             enabled,
@@ -255,7 +257,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
 
         if not enabled:
             _log.info(
-                "AutoPromptReason.run: extension disabled — skipping LLM call."
+                "AutoPromptReason.process: extension disabled — skipping LLM call."
             )
             return None
 
@@ -265,7 +267,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             config = self._load_config()
             injection_mode: str = config.get("prompt_injection", "append")
             _log.debug(
-                "AutoPromptReason.run: config loaded injection_mode=%r",
+                "AutoPromptReason.process: config loaded injection_mode=%r",
                 injection_mode,
             )
 
@@ -278,7 +280,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 kwargs["api_key"] = SecretStr(api_key)
 
             _log.debug(
-                "AutoPromptReason.run: creating LLMClient"
+                "AutoPromptReason.process: creating LLMClient"
                 " provider=%r model=%r base_url=%r has_api_key=%r",
                 provider_type,
                 model_name,
@@ -286,14 +288,14 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 bool(api_key),
             )
             client = LLMClient.create(provider_type, **kwargs)
-            _log.debug("AutoPromptReason.run: LLMClient.create() returned %r", type(client).__name__)
+            _log.debug("AutoPromptReason.process: LLMClient.create() returned %r", type(client).__name__)
 
             # Treat empty string as "no system prompt" so the provider falls
             # back to its own defaults.
             effective_system_prompt: Optional[str] = system_prompt or None
 
             _log.info(
-                "AutoPromptReason.run: calling client.generate()"
+                "AutoPromptReason.process: calling client.generate()"
                 " provider=%r model=%r effort=%r"
                 " user_prompt_len=%d has_system_prompt=%r",
                 provider_type,
@@ -308,7 +310,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 system_prompt=effective_system_prompt,
             )
             _log.debug(
-                "AutoPromptReason.run: generate() returned"
+                "AutoPromptReason.process: generate() returned"
                 " total_tokens=%r reasoning_time_ms=%r",
                 response.total_tokens,
                 response.reasoning_time_ms,
@@ -316,7 +318,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
 
             # Persist response for potential use by postprocess().
             self._last_response = response
-            _log.debug("AutoPromptReason.run: _last_response stored")
+            _log.debug("AutoPromptReason.process: _last_response stored")
 
             # Record in session history.
             self._history.add_from_response(
@@ -325,7 +327,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 reasoning_effort=reasoning_effort,
             )
             _log.debug(
-                "AutoPromptReason.run: history written history_size=%d",
+                "AutoPromptReason.process: history written history_size=%d",
                 len(self._history),
             )
 
@@ -340,7 +342,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 p.prompt = f"{p.prompt}, {response.final_answer}"
 
             _log.info(
-                "AutoPromptReason.run: prompt injected"
+                "AutoPromptReason.process: prompt injected"
                 " mode=%r provider=%r original_len=%d result_len=%d",
                 injection_mode,
                 provider_type,
@@ -350,7 +352,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
 
         except Exception:  # noqa: BLE001
             _log.exception(
-                "AutoPromptReason.run: error during LLM generation — "
+                "AutoPromptReason.process: error during LLM generation — "
                 "prompt unchanged."
             )
 
