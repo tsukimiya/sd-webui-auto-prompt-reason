@@ -162,7 +162,7 @@ class OllamaProvider(BaseProvider):
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
         """Parse an Ollama API response into a :class:`ReasoningResponse`.
 
-        Handles both Shape A (``thinking`` field) and Shape B (``<think>``
+        Handles both Shape A (``thinking`` field) and Shape B (``<think…``
         tags embedded in ``content``).
 
         Parameters
@@ -175,14 +175,25 @@ class OllamaProvider(BaseProvider):
         ReasoningResponse
             Normalised provider-agnostic response.
         """
+        # --- 診断ログ: 生レスポンス構造の確認 ---
         message: dict[str, Any] = raw_response.get("message", {})
         content: str = message.get("content", "")
+        logger.debug(
+            "parse_response: raw keys=%s message_keys=%s content_len=%d"
+            " has_thinking_field=%s",
+            sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
+            sorted(message.keys()) if isinstance(message, dict) else type(message).__name__,
+            len(content),
+            "thinking" in message,
+        )
 
         thinking_content: Optional[str] = None
         final_answer: str = content
+        _shape_detected: str = "plain(no thinking)"
 
         # --- Shape A: Ollama ≥ 0.7.0 has a dedicated ``thinking`` field ---
         if "thinking" in message:
+            _shape_detected = "A(dedicated thinking field)"
             thinking_content = message["thinking"] or None
             final_answer = content
         else:
@@ -192,16 +203,29 @@ class OllamaProvider(BaseProvider):
 
             if think_start != -1 and think_end != -1:
                 # Both tags present — clean extraction
+                _shape_detected = "B(both think tags)"
                 thinking_content = content[think_start + 7 : think_end]
                 final_answer = content[think_end + 8 :].strip()
             elif think_start != -1:
                 # Opening tag only — response was truncated
+                _shape_detected = "B(unclosed think tag — truncated)"
                 thinking_content = content[think_start + 7 :]
                 final_answer = ""
             # else: no tags — keep thinking_content=None, final_answer=content
 
         completion_tokens: int = raw_response.get("eval_count", 0)
         prompt_tokens: int = raw_response.get("prompt_eval_count", 0)
+
+        # --- 診断ログ: パース結果の確認 ---
+        logger.info(
+            "parse_response: final_answer_len=%d thinking_len=%s"
+            " shape=%s completion_tokens=%d prompt_tokens=%d",
+            len(final_answer.strip()),
+            len(thinking_content) if thinking_content else "None",
+            _shape_detected,
+            completion_tokens,
+            prompt_tokens,
+        )
 
         return ReasoningResponse(
             final_answer=final_answer.strip(),

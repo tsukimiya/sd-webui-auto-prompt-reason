@@ -420,13 +420,21 @@ class LLMClient:
             status_code: Optional[int] = (
                 exc.response.status_code if exc.response is not None else None
             )
-            self._logger.debug(
+            # レスポンスボディをログ出力 — 524等のエラー原因特定に不可欠
+            response_body = ""
+            if exc.response is not None:
+                try:
+                    response_body = exc.response.text[:500]
+                except Exception:  # noqa: BLE001
+                    response_body = "<unable to read response body>"
+            self._logger.warning(
                 "[REQUEST FAILED] provider=%s model=%s reason=http_error "
-                "status=%s elapsed_ms=%d error=%s",
+                "status=%s elapsed_ms=%d response_body=%.200s error=%s",
                 provider_name,
                 model_name,
                 status_code,
                 elapsed_ms,
+                response_body,
                 exc,
             )
             raise

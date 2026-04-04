@@ -314,12 +314,23 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 reasoning_effort=reasoning_effort,
                 system_prompt=effective_system_prompt,
             )
-            _log.debug(
+            _log.info(
                 "AutoPromptReason.process: generate() returned"
+                " final_answer=%.300r thinking_content=%s"
                 " total_tokens=%r reasoning_time_ms=%r",
+                response.final_answer,
+                "present" if response.thinking_content else "None",
                 response.total_tokens,
                 response.reasoning_time_ms,
             )
+
+            # final_answerが空文字列の場合は警告
+            if not response.final_answer or not response.final_answer.strip():
+                _log.warning(
+                    "AutoPromptReason.process: LLM returned empty final_answer — "
+                    "raw_response_keys=%s",
+                    sorted(response.raw_response.keys()) if isinstance(response.raw_response, dict) else type(response.raw_response).__name__,
+                )
 
             # Persist response for potential use by postprocess().
             self._last_response = response
@@ -348,11 +359,13 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
 
             _log.info(
                 "AutoPromptReason.process: prompt injected"
-                " mode=%r provider=%r original_len=%d result_len=%d",
+                " mode=%r provider=%r original_len=%d result_len=%d"
+                " injected_prompt=%.500r",
                 injection_mode,
                 provider_type,
                 original_prompt_len,
                 len(p.prompt),
+                p.prompt,
             )
 
         except Exception:  # noqa: BLE001
@@ -459,7 +472,15 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             if isinstance(provider_section, dict):
                 timeout_value = provider_section.get("timeout")
                 if timeout_value is None:
-                    defaults["provider_timeout"] = (10, None)
+                    # null / 未設定 → 安全なデフォルト (connect=10s, read=180s)
+                    # read_timeout=None (無制限) はCloudflare等のリバースプロキシが
+                    # 先にタイムアウトして524エラーを返す原因になるため避ける
+                    defaults["provider_timeout"] = _DEFAULT_PROVIDER_TIMEOUT
+                    _log.debug(
+                        "AutoPromptReason._load_config: timeout is null — "
+                        "using default timeout=%r",
+                        _DEFAULT_PROVIDER_TIMEOUT,
+                    )
                 elif isinstance(timeout_value, (int, float)) and timeout_value > 0:
                     defaults["provider_timeout"] = (10, int(timeout_value))
             self._cached_config = defaults
