@@ -73,7 +73,7 @@ def _make_ollama_client(model_name: str = "qwen3.5:7b") -> LLMClient:
 
 def _make_ollama_client_with_timeout(
     model_name: str = "qwen3.5:7b",
-    timeout: tuple[int, int] = (10, 180),
+    timeout: tuple[int, int | None] = (10, None),
 ) -> LLMClient:
     """Return a real :class:`LLMClient` with an explicit timeout override."""
     return LLMClient.create("ollama", model_name=model_name, timeout=timeout)
@@ -874,7 +874,7 @@ class TestLogging:
 
     def test_request_timeout_logged_with_url_and_timeout(self) -> None:
         """``[REQUEST TIMEOUT]`` includes URL and timeout details."""
-        client = _make_ollama_client_with_timeout(timeout=(10, 180))
+        client = _make_ollama_client_with_timeout(timeout=(10, None))
         captured: list[str] = []
 
         class _Handler(logging.Handler):
@@ -898,11 +898,11 @@ class TestLogging:
 
         timeout_log = next(msg for msg in captured if "[REQUEST TIMEOUT]" in msg)
         assert "url=http://localhost:11434/api/chat" in timeout_log
-        assert "timeout=(10, 180)" in timeout_log
+        assert "timeout=(10, None)" in timeout_log
 
     def test_request_failed_log_includes_timeout_metadata(self) -> None:
         """Generic request failures include URL and timeout metadata."""
-        client = _make_ollama_client_with_timeout(timeout=(10, 180))
+        client = _make_ollama_client_with_timeout(timeout=(10, None))
         captured: list[str] = []
 
         class _Handler(logging.Handler):
@@ -926,7 +926,7 @@ class TestLogging:
 
         failed_log = next(msg for msg in captured if "[REQUEST FAILED]" in msg)
         assert "url=http://localhost:11434/api/chat" in failed_log
-        assert "timeout=(10, 180)" in failed_log
+        assert "timeout=(10, None)" in failed_log
 
     # --- provider / model metadata in logs ---
 
