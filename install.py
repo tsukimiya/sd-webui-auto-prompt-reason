@@ -5,6 +5,12 @@ import os
 # This ensures we import the correct launch.py from parent directory
 extension_dir = os.path.dirname(os.path.realpath(__file__))
 sd_reforge_dir = os.path.dirname(os.path.dirname(extension_dir))
+
+# Remove extension directory from path to prevent importing local modules
+if extension_dir in sys.path:
+    sys.path.remove(extension_dir)
+
+# Add sd_reforge to path first
 sys.path.insert(0, sd_reforge_dir)
 
 import launch
