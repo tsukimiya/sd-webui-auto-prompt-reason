@@ -179,7 +179,7 @@ class OllamaProvider(BaseProvider):
         choices: list = raw_response.get("choices", [])
         message: dict[str, Any] = choices[0].get("message", {}) if choices else {}
         content: str = message.get("content", "")
-        logger.debug(
+        logger.info(
             "parse_response: raw keys=%s choices_len=%d message_keys=%s content_len=%d"
             " has_thinking_field=%s",
             sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,

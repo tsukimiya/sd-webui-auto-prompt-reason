@@ -349,7 +349,7 @@ class LLMClient:
         # Stage 1: config validated
         # ------------------------------------------------------------------
         self._provider.validate_config()
-        self._logger.debug(
+        self._logger.info(
             "[CONFIG VALIDATED] provider=%s model=%s timeout=%s",
             provider_name,
             model_name,
@@ -365,7 +365,7 @@ class LLMClient:
             reasoning_effort,
             system_prompt,
         )
-        self._logger.debug(
+        self._logger.info(
             "[PAYLOAD PREPARED] provider=%s model=%s effort=%s "
             "has_prompt=%s has_system=%s has_image=%s payload_meta=(%s)",
             provider_name,
@@ -383,7 +383,7 @@ class LLMClient:
         # ------------------------------------------------------------------
         # Stage 3: request about to send
         # ------------------------------------------------------------------
-        self._logger.debug(
+        self._logger.info(
             "[REQUEST SENDING] provider=%s model=%s url=%s headers=%s timeout=%s",
             provider_name,
             model_name,
@@ -405,7 +405,7 @@ class LLMClient:
             # ------------------------------------------------------------------
             # Stage 4: response received
             # ------------------------------------------------------------------
-            self._logger.debug(
+            self._logger.info(
                 "[RESPONSE RECEIVED] provider=%s model=%s status=%d elapsed_ms=%d",
                 provider_name,
                 model_name,
@@ -480,7 +480,7 @@ class LLMClient:
         # Stage 5: JSON parsed
         # ------------------------------------------------------------------
         raw_json = response.json()
-        self._logger.debug(
+        self._logger.info(
             "[JSON PARSED] provider=%s model=%s response_keys=%s",
             provider_name,
             model_name,

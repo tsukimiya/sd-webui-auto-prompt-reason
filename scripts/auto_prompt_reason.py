@@ -242,7 +242,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             SD WebUI continues its normal processing pipeline regardless of
             the return value.
         """
-        _log.debug(
+        _log.info(
             "AutoPromptReason.process: invoked enabled=%r provider=%r model=%r"
             " effort=%r base_url=%r has_api_key=%r"
             " user_prompt_len=%d has_system_prompt=%r",
@@ -268,7 +268,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             config = self._load_config()
             injection_mode: str = config.get("prompt_injection", "append")
             provider_timeout = cast(tuple[int, int], config.get("provider_timeout", _DEFAULT_PROVIDER_TIMEOUT))
-            _log.debug(
+            _log.info(
                 "AutoPromptReason.process: config loaded injection_mode=%r provider_timeout=%r",
                 injection_mode,
                 provider_timeout,
@@ -283,7 +283,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             if api_key:
                 kwargs["api_key"] = SecretStr(api_key)
 
-            _log.debug(
+            _log.info(
                 "AutoPromptReason.process: creating LLMClient"
                 " provider=%r model=%r base_url=%r has_api_key=%r timeout=%r",
                 provider_type,
@@ -293,7 +293,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 provider_timeout,
             )
             client = LLMClient.create(provider_type, **kwargs)
-            _log.debug("AutoPromptReason.process: LLMClient.create() returned %r", type(client).__name__)
+            _log.info("AutoPromptReason.process: LLMClient.create() returned %r", type(client).__name__)
 
             # Treat empty string as "no system prompt" so the provider falls
             # back to its own defaults.
