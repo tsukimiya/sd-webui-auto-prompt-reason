@@ -242,21 +242,17 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             SD WebUI continues its normal processing pipeline regardless of
             the return value.
         """
-        _log.info(
-            "AutoPromptReason.process: invoked enabled=%r provider=%r model=%r"
-            " effort=%r base_url=%r has_api_key=%r"
-            " user_prompt_len=%d has_system_prompt=%r",
-            enabled,
-            provider_type,
-            model_name,
-            reasoning_effort,
-            base_url,
-            bool(api_key),
-            len(user_prompt),
-            bool(system_prompt),
+        _msg = (
+            f"[AutoPromptReason] process: invoked enabled={enabled!r}"
+            f" provider={provider_type!r} model={model_name!r}"
+            f" effort={reasoning_effort!r} base_url={base_url!r}"
+            f" user_prompt_len={len(user_prompt)}"
         )
+        print(_msg)
+        _log.info(_msg)
 
         if not enabled:
+            print("[AutoPromptReason] process: extension disabled — skipping LLM call.")
             _log.info(
                 "AutoPromptReason.process: extension disabled — skipping LLM call."
             )
