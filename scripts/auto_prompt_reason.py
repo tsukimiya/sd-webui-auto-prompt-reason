@@ -279,6 +279,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             config = self._load_config()
             injection_mode: str = config.get("prompt_injection", "append")
             provider_timeout = cast(tuple[int, int], config.get("provider_timeout", _DEFAULT_PROVIDER_TIMEOUT))
+            print(f"[AutoPromptReason] config loaded injection_mode={injection_mode!r} timeout={provider_timeout!r}")
             _log.info(
                 "AutoPromptReason.process: config loaded injection_mode=%r provider_timeout=%r",
                 injection_mode,
@@ -294,6 +295,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             if api_key:
                 kwargs["api_key"] = SecretStr(api_key)
 
+            print(f"[AutoPromptReason] creating LLMClient provider={provider_type!r} model={model_name!r} timeout={provider_timeout!r}")
             _log.info(
                 "AutoPromptReason.process: creating LLMClient"
                 " provider=%r model=%r base_url=%r has_api_key=%r timeout=%r",
@@ -304,12 +306,14 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 provider_timeout,
             )
             client = LLMClient.create(provider_type, **kwargs)
+            print(f"[AutoPromptReason] LLMClient created: {type(client).__name__}")
             _log.info("AutoPromptReason.process: LLMClient.create() returned %r", type(client).__name__)
 
             # Treat empty string as "no system prompt" so the provider falls
             # back to its own defaults.
             effective_system_prompt: Optional[str] = system_prompt or None
 
+            print(f"[AutoPromptReason] calling generate() model={model_name!r} effort={reasoning_effort!r} user_prompt_len={len(user_prompt)}")
             _log.info(
                 "AutoPromptReason.process: calling client.generate()"
                 " provider=%r model=%r effort=%r"
@@ -325,6 +329,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 reasoning_effort=reasoning_effort,
                 system_prompt=effective_system_prompt,
             )
+            print(f"[AutoPromptReason] generate() done final_answer_len={len(response.final_answer)} tokens={response.total_tokens}")
             _log.info(
                 "AutoPromptReason.process: generate() returned"
                 " final_answer=%.300r thinking_content=%s"
@@ -379,12 +384,20 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 p.prompt,
             )
 
-        except Exception:  # noqa: BLE001
+        except Exception as _exc:  # noqa: BLE001
+            import traceback
+            _tb = traceback.format_exc()
+            print(
+                f"[AutoPromptReason] ERROR during LLM generation"
+                f" provider={provider_type!r} model={model_name!r}"
+                f" base_url={base_url!r}"
+                f" timeout={provider_timeout if 'provider_timeout' in locals() else _DEFAULT_PROVIDER_TIMEOUT!r}"
+                f"\n{_tb}"
+            )
             _log.exception(
                 "AutoPromptReason.process: error during LLM generation"
                 " provider=%r model=%r base_url=%r timeout=%r — "
-                "prompt unchanged."
-                ,
+                "prompt unchanged.",
                 provider_type,
                 model_name,
                 base_url,
