@@ -330,6 +330,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 system_prompt=effective_system_prompt,
             )
             print(f"[AutoPromptReason] generate() done final_answer_len={len(response.final_answer)} tokens={response.total_tokens}")
+            print(f"[AutoPromptReason] final_answer={response.final_answer!r}")
             _log.info(
                 "AutoPromptReason.process: generate() returned"
                 " final_answer=%.300r thinking_content=%s"
