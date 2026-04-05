@@ -11,7 +11,7 @@ Design notes
 ------------
 * All SD WebUI and Gradio imports are guarded with ``try/except`` so the module
   can be imported in test environments where those packages are absent.
-* The ``run()`` method is called by SD WebUI on a worker thread — it is safe to
+* The ``process()`` method is called by SD WebUI on a worker thread — it is safe to
   call ``LLMClient.generate()`` synchronously here.
 * No global mutable config state is used; config is loaded once per instance
   and cached via :py:meth:`AutoPromptReason._load_config`.
@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import yaml
 
@@ -38,13 +38,29 @@ from apr_modules.ui_components import build_thinking_display, build_metrics_disp
 import modules.scripts as scripts
 import gradio as gr
 
+# ---------------------------------------------------------------------------
+# Logging bootstrap
+# ---------------------------------------------------------------------------
+# SD WebUI's logging_config.setup_logging() only installs root handlers when
+# --loglevel / SD_WEBUI_LOG_LEVEL is explicitly set.  When neither is provided
+# the root logger has no handlers and every getLogger(...) call silently drops
+# its messages.  Install a fallback StreamHandler so this extension's logs
+# always reach the console regardless of the host's log configuration.
 _log = logging.getLogger(__name__)
+if not logging.root.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    logging.root.addHandler(_handler)
+    logging.root.setLevel(logging.INFO)
 
 # ---------------------------------------------------------------------------
 # Extension root — used to locate config.yaml at runtime
 # ---------------------------------------------------------------------------
 
 _EXTENSION_DIR = Path(__file__).resolve().parent.parent
+_DEFAULT_PROVIDER_TIMEOUT = (10, 180)
 
 
 # ---------------------------------------------------------------------------
@@ -60,8 +76,8 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     * :py:meth:`title` — display name in the UI.
     * :py:meth:`show` — visibility control; always shown in both tabs.
     * :py:meth:`ui` — builds and returns the Gradio component list.
-    * :py:meth:`run` — called just before image generation; injects the LLM
-      response into the processing object's ``prompt`` attribute.
+    * :py:meth:`process` — called just before image generation; injects the LLM
+      response into ``p.all_prompts`` for all images in the batch.
     """
 
     def __init__(self) -> None:
@@ -107,7 +123,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
         """Build and return the Gradio UI components for this script.
 
         The list order here **must** match the positional ``*args`` order
-        in :py:meth:`run`.
+        in :py:meth:`process`.
 
         Parameters
         ----------
@@ -187,7 +203,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             provider_model_box,
         ]
 
-    def run(
+    def process(
         self,
         p: Any,
         enabled: bool,
@@ -202,15 +218,18 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     ) -> None:
         """Enhance the prompt via LLM and inject the result into *p*.
 
-        Called by SD WebUI just before image generation begins.  The method is
-        invoked on SD WebUI's worker thread so blocking HTTP calls are safe
-        here.
+        Called by SD WebUI just before image generation begins on the worker
+        thread, making it safe to call ``LLMClient.generate()`` synchronously.
+
+        This is the correct always-on pre-generation callback for
+        ``AlwaysVisible`` scripts; ``run()`` is not invoked for such scripts.
 
         Parameters
         ----------
         p:
-            SD WebUI processing object.  This method reads and writes
-            ``p.prompt`` only.
+            SD WebUI processing object.  This method writes to
+            ``p.all_prompts`` (the authoritative per-batch prompt list used
+            by the sampler).
         enabled:
             Whether the extension is active for this generation.
         provider_type:
@@ -231,7 +250,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
         *_:
             Absorbs display-only args from ui() (thinking_textbox,
             total_tokens_box, gen_time_box, provider_model_box); ignored by
-            run() — updated in postprocess().
+            process() — updated in postprocess().
 
         Returns
         -------
@@ -239,7 +258,24 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             SD WebUI continues its normal processing pipeline regardless of
             the return value.
         """
+        _log.info(
+            "AutoPromptReason.process: invoked enabled=%r provider=%r model=%r"
+            " effort=%r base_url=%r has_api_key=%r"
+            " user_prompt_len=%d has_system_prompt=%r",
+            enabled,
+            provider_type,
+            model_name,
+            reasoning_effort,
+            base_url,
+            bool(api_key),
+            len(user_prompt),
+            bool(system_prompt),
+        )
+
         if not enabled:
+            _log.info(
+                "AutoPromptReason.process: extension disabled — skipping LLM call."
+            )
             return None
 
         try:
@@ -247,36 +283,74 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             # available immediately after the response is received.
             config = self._load_config()
             injection_mode: str = config.get("prompt_injection", "append")
+            provider_timeout = cast(tuple[int, int], config.get("provider_timeout", _DEFAULT_PROVIDER_TIMEOUT))
+            _log.info(
+                "AutoPromptReason.process: config loaded injection_mode=%r provider_timeout=%r",
+                injection_mode,
+                provider_timeout,
+            )
 
             # Build provider kwargs; only pass api_key when non-empty.
             kwargs: dict[str, Any] = {
                 "base_url": base_url,
                 "model_name": model_name,
+                "timeout": provider_timeout,
             }
             if api_key:
                 kwargs["api_key"] = SecretStr(api_key)
 
-            client = LLMClient.create(provider_type, **kwargs)
-
-            _log.debug(
-                "AutoPromptReason.run: calling provider=%r model=%r effort=%r",
+            _log.info(
+                "AutoPromptReason.process: creating LLMClient"
+                " provider=%r model=%r base_url=%r has_api_key=%r timeout=%r",
                 provider_type,
                 model_name,
-                reasoning_effort,
+                base_url,
+                bool(api_key),
+                provider_timeout,
             )
+            client = LLMClient.create(provider_type, **kwargs)
+            _log.info("AutoPromptReason.process: LLMClient.create() returned %r", type(client).__name__)
 
             # Treat empty string as "no system prompt" so the provider falls
             # back to its own defaults.
             effective_system_prompt: Optional[str] = system_prompt or None
 
+            _log.info(
+                "AutoPromptReason.process: calling client.generate()"
+                " provider=%r model=%r effort=%r"
+                " user_prompt_len=%d has_system_prompt=%r",
+                provider_type,
+                model_name,
+                reasoning_effort,
+                len(user_prompt),
+                effective_system_prompt is not None,
+            )
             response: ReasoningResponse = client.generate(
                 user_prompt,
                 reasoning_effort=reasoning_effort,
                 system_prompt=effective_system_prompt,
             )
+            _log.info(
+                "AutoPromptReason.process: generate() returned"
+                " final_answer=%.300r thinking_content=%s"
+                " total_tokens=%r reasoning_time_ms=%r",
+                response.final_answer,
+                "present" if response.thinking_content else "None",
+                response.total_tokens,
+                response.reasoning_time_ms,
+            )
+
+            # final_answerが空文字列の場合は警告
+            if not response.final_answer or not response.final_answer.strip():
+                _log.warning(
+                    "AutoPromptReason.process: LLM returned empty final_answer — "
+                    "raw_response_keys=%s",
+                    sorted(response.raw_response.keys()) if isinstance(response.raw_response, dict) else type(response.raw_response).__name__,
+                )
 
             # Persist response for potential use by postprocess().
             self._last_response = response
+            _log.debug("AutoPromptReason.process: _last_response stored")
 
             # Record in session history.
             self._history.add_from_response(
@@ -284,26 +358,56 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 response=response,
                 reasoning_effort=reasoning_effort,
             )
+            _log.debug(
+                "AutoPromptReason.process: history written history_size=%d",
+                len(self._history),
+            )
 
-            # Inject the LLM answer into the processing prompt.
-            if injection_mode == "replace":
-                p.prompt = response.final_answer
-            elif injection_mode == "prepend":
-                p.prompt = f"{response.final_answer}, {p.prompt}"
-            else:
-                # Default: append
-                p.prompt = f"{p.prompt}, {response.final_answer}"
+            # Inject the LLM answer into p.all_prompts (the authoritative list
+            # used by the sampler).  p.prompt is only used once by
+            # setup_prompts() to build all_prompts before process() is called;
+            # writing to p.prompt afterwards has no effect on the actual
+            # generation.  Iterate over all entries to cover batch generation.
+            # Reference: xlinx/sd-webui-decadetw-auto-prompt-llm uses the
+            # same p.all_prompts loop pattern.
+            answer = response.final_answer
+            original_prompt_len = len(p.all_prompts[0]) if p.all_prompts else len(p.prompt)
 
+            for i in range(len(p.all_prompts)):
+                original = p.all_prompts[i]
+                if injection_mode == "replace":
+                    p.all_prompts[i] = answer
+                elif injection_mode == "prepend":
+                    sep = ", " if original else ""
+                    p.all_prompts[i] = f"{answer}{sep}{original}"
+                else:
+                    # Default: append
+                    sep = ", " if original else ""
+                    p.all_prompts[i] = f"{original}{sep}{answer}"
+
+            injected_sample = p.all_prompts[0] if p.all_prompts else ""
             _log.info(
-                "AutoPromptReason: prompt injected (mode=%r, provider=%r)",
+                "AutoPromptReason.process: prompt injected"
+                " mode=%r provider=%r all_prompts_count=%d"
+                " original_len=%d result_len=%d"
+                " injected_prompt=%.500r",
                 injection_mode,
                 provider_type,
+                len(p.all_prompts),
+                original_prompt_len,
+                len(injected_sample),
+                injected_sample,
             )
 
         except Exception:  # noqa: BLE001
             _log.exception(
-                "AutoPromptReason.run: error during LLM generation — "
-                "prompt unchanged."
+                "AutoPromptReason.process: error during LLM generation"
+                " provider=%r model=%r base_url=%r timeout=%r — "
+                "prompt unchanged.",
+                provider_type,
+                model_name,
+                base_url,
+                provider_timeout if 'provider_timeout' in locals() else _DEFAULT_PROVIDER_TIMEOUT,
             )
 
         return None
@@ -348,11 +452,12 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _load_config(self) -> dict:
+    def _load_config(self, provider_type: str = "ollama") -> dict:
         """Load ``config.yaml`` from the extension root directory.
 
-        Returns a dict with at least the ``prompt_injection`` and
-        ``default_system_prompt`` keys.  Falls back to safe defaults if the
+        Returns a dict with at least the ``prompt_injection``,
+        ``default_system_prompt``, and ``provider_timeout`` keys. Falls back to
+        safe defaults if the
         file is missing or cannot be parsed.
 
         Returns
@@ -366,12 +471,15 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             ``default_system_prompt``
                 System prompt string shown as the textbox default value.
                 Empty string when not configured.
+            ``provider_timeout``
+                Two-element timeout tuple ``(connect_timeout_s, read_timeout_s)``.
         """
         if self._cached_config is not None:
             return self._cached_config
         defaults: dict[str, Any] = {
             "prompt_injection": "append",
             "default_system_prompt": "",
+            "provider_timeout": _DEFAULT_PROVIDER_TIMEOUT,
         }
         config_path = _EXTENSION_DIR / "config.yaml"
         if not config_path.exists():
@@ -390,6 +498,21 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 defaults["prompt_injection"] = mode
                 default_sp = ui_section.get("default_system_prompt", "")
                 defaults["default_system_prompt"] = default_sp if isinstance(default_sp, str) else ""
+            provider_section = raw.get(provider_type, {})
+            if isinstance(provider_section, dict):
+                timeout_value = provider_section.get("timeout")
+                if timeout_value is None:
+                    # null / 未設定 → 安全なデフォルト (connect=10s, read=180s)
+                    # read_timeout=None (無制限) はCloudflare等のリバースプロキシが
+                    # 先にタイムアウトして524エラーを返す原因になるため避ける
+                    defaults["provider_timeout"] = _DEFAULT_PROVIDER_TIMEOUT
+                    _log.debug(
+                        "AutoPromptReason._load_config: timeout is null — "
+                        "using default timeout=%r",
+                        _DEFAULT_PROVIDER_TIMEOUT,
+                    )
+                elif isinstance(timeout_value, (int, float)) and timeout_value > 0:
+                    defaults["provider_timeout"] = (10, int(timeout_value))
             self._cached_config = defaults
             return self._cached_config
         except Exception:  # noqa: BLE001

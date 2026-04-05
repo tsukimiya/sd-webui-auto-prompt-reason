@@ -35,7 +35,7 @@ class GeminiProvider(BaseProvider):
         Root URL for the Generative Language API
         (default ``"https://generativelanguage.googleapis.com/v1"``).
     timeout:
-        ``(connect_timeout_s, read_timeout_s)`` tuple (default ``(10, 60)``).
+        ``(connect_timeout_s, read_timeout_s)`` tuple (default ``(10, 180)``).
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class GeminiProvider(BaseProvider):
         api_key: SecretStr,
         model_name: str = "gemini-2.0-flash",
         base_url: str = "https://generativelanguage.googleapis.com/v1",
-        timeout: tuple = (10, 60),
+        timeout: tuple = (10, 180),
     ) -> None:
         super().__init__(
             base_url=base_url,

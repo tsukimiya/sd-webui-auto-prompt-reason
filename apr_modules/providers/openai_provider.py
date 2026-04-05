@@ -35,7 +35,7 @@ class OpenAICompatibleProvider(BaseProvider):
         for unauthenticated local servers.
     timeout:
         ``(connect_timeout_s, read_timeout_s)`` tuple. Defaults to
-        ``(10, 60)``.
+        ``(10, 180)``.
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class OpenAICompatibleProvider(BaseProvider):
         base_url: str = "http://localhost:1234/v1",
         model_name: str = "",
         api_key: Optional[SecretStr] = None,
-        timeout: tuple = (10, 60),
+        timeout: tuple = (10, 180),
     ) -> None:
         super().__init__(
             base_url=base_url,

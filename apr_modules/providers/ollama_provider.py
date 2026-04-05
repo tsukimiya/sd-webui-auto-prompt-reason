@@ -60,7 +60,7 @@ class OllamaProvider(BaseProvider):
         require authentication; pass ``None`` (the default).
     timeout:
         ``(connect_timeout, read_timeout)`` in seconds.  Defaults to
-        ``(10, 60)``.
+        ``(10, 180)``.
 
     Examples
     --------
@@ -79,7 +79,7 @@ class OllamaProvider(BaseProvider):
         base_url: str = _DEFAULT_BASE_URL,
         model_name: str = "",
         api_key: Optional[SecretStr] = None,
-        timeout: tuple = (10, 60),
+        timeout: tuple = (10, 180),
     ) -> None:
         effective_url = base_url if base_url else _DEFAULT_BASE_URL
         super().__init__(
@@ -153,36 +153,56 @@ class OllamaProvider(BaseProvider):
             "model": self.model_name,
             "messages": messages,
             "stream": False,
-            "options": {
-                "temperature": self._effort_to_temperature(reasoning_effort),
-                "num_predict": 2048,
-            },
+            "temperature": self._effort_to_temperature(reasoning_effort),
+            "max_tokens": 2048,
         }
 
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
         """Parse an Ollama API response into a :class:`ReasoningResponse`.
 
         Handles both Shape A (``thinking`` field) and Shape B (``<think>``
-        tags embedded in ``content``).
+        tags embedded in ``content``). Uses the OpenAI-compatible
+        ``/v1/chat/completions`` response format (``choices[0].message.content``).
 
         Parameters
         ----------
         raw_response:
-            Deserialised JSON body from the Ollama ``/api/chat`` endpoint.
+            Deserialised JSON body from the Ollama ``/v1/chat/completions`` endpoint.
 
         Returns
         -------
         ReasoningResponse
             Normalised provider-agnostic response.
         """
-        message: dict[str, Any] = raw_response.get("message", {})
+        # --- 診断ログ: 生レスポンス構造の確認 ---
+        # OpenAI互換形式: choices[0].message.content
+        choices: list = raw_response.get("choices", [])
+        message: dict[str, Any] = choices[0].get("message", {}) if choices else {}
         content: str = message.get("content", "")
+        logger.info(
+            "parse_response: raw keys=%s choices_len=%d message_keys=%s content_len=%d"
+            " has_thinking_field=%s",
+            sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
+            len(choices),
+            sorted(message.keys()) if isinstance(message, dict) else type(message).__name__,
+            len(content),
+            "thinking" in message,
+        )
+
+        if not choices:
+            logger.warning(
+                "parse_response: 'choices' field missing or empty — "
+                "raw_keys=%s  (wrong endpoint or unexpected response format?)",
+                sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
+            )
 
         thinking_content: Optional[str] = None
         final_answer: str = content
+        _shape_detected: str = "plain(no thinking)"
 
         # --- Shape A: Ollama ≥ 0.7.0 has a dedicated ``thinking`` field ---
         if "thinking" in message:
+            _shape_detected = "A(dedicated thinking field)"
             thinking_content = message["thinking"] or None
             final_answer = content
         else:
@@ -192,16 +212,31 @@ class OllamaProvider(BaseProvider):
 
             if think_start != -1 and think_end != -1:
                 # Both tags present — clean extraction
+                _shape_detected = "B(both think tags)"
                 thinking_content = content[think_start + 7 : think_end]
                 final_answer = content[think_end + 8 :].strip()
             elif think_start != -1:
                 # Opening tag only — response was truncated
+                _shape_detected = "B(unclosed think tag — truncated)"
                 thinking_content = content[think_start + 7 :]
                 final_answer = ""
             # else: no tags — keep thinking_content=None, final_answer=content
 
-        completion_tokens: int = raw_response.get("eval_count", 0)
-        prompt_tokens: int = raw_response.get("prompt_eval_count", 0)
+        # OpenAI互換レスポンスのトークンカウント
+        usage: dict[str, Any] = raw_response.get("usage", {})
+        completion_tokens: int = usage.get("completion_tokens", 0)
+        prompt_tokens: int = usage.get("prompt_tokens", 0)
+
+        # --- 診断ログ: パース結果の確認 ---
+        logger.info(
+            "parse_response: final_answer_len=%d thinking_len=%s"
+            " shape=%s completion_tokens=%d prompt_tokens=%d",
+            len(final_answer.strip()),
+            len(thinking_content) if thinking_content else "None",
+            _shape_detected,
+            completion_tokens,
+            prompt_tokens,
+        )
 
         return ReasoningResponse(
             final_answer=final_answer.strip(),

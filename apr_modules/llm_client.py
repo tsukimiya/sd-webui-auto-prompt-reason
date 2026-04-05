@@ -16,15 +16,36 @@ Design notes
 * Gemini uses a ``?key=`` URL query parameter instead of a ``Bearer`` token
   header — the :py:meth:`_build_headers` helper omits ``Authorization`` for
   that provider.
+
+Logging
+-------
+Each call to :py:meth:`generate` emits DEBUG-level log lines at the following
+lifecycle stages so that extension logs make the request path immediately
+visible:
+
+1. ``[CONFIG VALIDATED]``  — provider validated, config is intact.
+2. ``[PAYLOAD PREPARED]``  — request body built; logged *without* raw image data.
+3. ``[REQUEST SENDING]``   — URL, provider, model, timeout logged just before
+   ``requests.post`` is called.  Gemini ``?key=`` is redacted.
+   ``Authorization`` header value is never logged.
+4. ``[RESPONSE RECEIVED]`` — HTTP status code and elapsed time logged.
+5. ``[JSON PARSED]``       — top-level keys of the parsed JSON body logged.
+6. ``[REQUEST TIMEOUT]``   — explicit timeout log including URL and timeout.
+7. ``[REQUEST FAILED]``    — status code (if HTTP) or exception type for any
+   failure; also logged from the async worker wrapper.
+
+None of these messages include raw API keys, raw Authorization header values,
+or full base-64 image blobs.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 import threading
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
@@ -33,6 +54,157 @@ from apr_modules.providers.base_provider import BaseProvider, ProviderType
 from apr_modules.providers.gemini_provider import GeminiProvider
 from apr_modules.providers.ollama_provider import OllamaProvider
 from apr_modules.providers.openai_provider import OpenAICompatibleProvider
+
+# ---------------------------------------------------------------------------
+# Module-level redaction helpers
+# ---------------------------------------------------------------------------
+
+# Matches the ?key=<value> query parameter used by Gemini.
+_KEY_PARAM_RE = re.compile(r"(\?key=)[^&\s]+")
+# Maximum characters shown for a base-64 blob before truncation.
+_B64_PREVIEW_LEN = 16
+
+
+def _redact_url(url: str) -> str:
+    """Return *url* with any ``?key=<value>`` query parameter redacted.
+
+    Parameters
+    ----------
+    url:
+        The raw URL that may contain a Gemini ``?key=`` param.
+
+    Returns
+    -------
+    str
+        URL safe to include in log output.
+
+    Examples
+    --------
+    >>> _redact_url("https://api.example.com/v1/models/foo:gen?key=secret123")
+    'https://api.example.com/v1/models/foo:gen?key=**redacted**'
+    >>> _redact_url("http://localhost:11434/api/chat")
+    'http://localhost:11434/api/chat'
+    """
+    return _KEY_PARAM_RE.sub(r"\g<1>**redacted**", url)
+
+
+def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Return a copy of *headers* with ``Authorization`` value masked.
+
+    Parameters
+    ----------
+    headers:
+        Raw HTTP headers dict that may contain credentials.
+
+    Returns
+    -------
+    dict[str, str]
+        Safe-to-log copy of the headers.
+    """
+    redacted: dict[str, str] = {}
+    for key, value in headers.items():
+        if key.lower() == "authorization":
+            redacted[key] = "Bearer **redacted**"
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def _summarise_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a log-safe summary of *payload* without full image blobs.
+
+    Recursively truncates any string value longer than :data:`_B64_PREVIEW_LEN`
+    characters inside ``inlineData.data`` (Gemini) or OpenAI-style image-url
+    ``data:image/…;base64,…`` values, replacing the remainder with
+    ``…<N bytes>``.
+
+    Parameters
+    ----------
+    payload:
+        The raw request body dict.
+
+    Returns
+    -------
+    dict[str, Any]
+        A shallow-copied dict safe to pass to a logger.
+    """
+    import copy
+
+    summary = copy.deepcopy(payload)
+    _truncate_images_inplace(summary)
+    return summary
+
+
+def _truncate_images_inplace(obj: Any) -> None:  # noqa: ANN401
+    """Recursively walk *obj* and truncate long base-64 strings in-place."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "data" and isinstance(value, str) and len(value) > _B64_PREVIEW_LEN:
+                # Gemini inlineData.data or any other raw b64 field.
+                obj[key] = value[:_B64_PREVIEW_LEN] + f"…<{len(value)} chars total>"
+            elif key == "url" and isinstance(value, str) and value.startswith("data:"):
+                # OpenAI-style data-URL: data:image/jpeg;base64,<blob>
+                obj[key] = value[:_B64_PREVIEW_LEN] + f"…<{len(value)} chars total>"
+            else:
+                _truncate_images_inplace(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            _truncate_images_inplace(item)
+
+
+def _payload_meta(payload: dict[str, Any]) -> str:
+    """Return a compact one-line metadata string describing *payload* shape.
+
+    Reports: top-level keys, whether a system instruction is present, whether
+    any image data is embedded, and message count where applicable.
+
+    Parameters
+    ----------
+    payload:
+        Raw (unredacted) request payload.
+
+    Returns
+    -------
+    str
+        Log-friendly summary string, e.g.
+        ``"keys=['model','messages'] messages=2 has_image=True"``.
+    """
+    parts: list[str] = [f"keys={sorted(payload.keys())}"]
+
+    # Message count (Ollama / OpenAI-compatible).
+    if "messages" in payload:
+        parts.append(f"messages={len(payload['messages'])}")
+
+    # Gemini-style system instruction.
+    if "systemInstruction" in payload:
+        parts.append("has_system=True")
+
+    # Check for embedded images anywhere in the payload.
+    has_image = _contains_image(payload)
+    if has_image:
+        parts.append("has_image=True")
+
+    return " ".join(parts)
+
+
+def _contains_image(obj: Any) -> bool:  # noqa: ANN401
+    """Return ``True`` if *obj* contains any embedded image data."""
+    if isinstance(obj, dict):
+        # Gemini inlineData.
+        if "inlineData" in obj:
+            return True
+        # OpenAI data-URL.
+        if obj.get("type") == "image_url":
+            return True
+        return any(_contains_image(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_contains_image(item) for item in obj)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# LLMClient
+# ---------------------------------------------------------------------------
 
 
 class LLMClient:
@@ -170,41 +342,152 @@ class LLMClient:
         requests.RequestException
             On any lower-level network error (timeout, connection refused, etc.).
         """
-        self._provider.validate_config()
+        provider_name = self._provider.get_provider_type().value
+        model_name = self._provider.model_name
 
+        # ------------------------------------------------------------------
+        # Stage 1: config validated
+        # ------------------------------------------------------------------
+        self._provider.validate_config()
+        self._logger.info(
+            "[CONFIG VALIDATED] provider=%s model=%s timeout=%s",
+            provider_name,
+            model_name,
+            self._provider.timeout,
+        )
+
+        # ------------------------------------------------------------------
+        # Stage 2: payload prepared
+        # ------------------------------------------------------------------
         payload = self._provider.build_request(
             prompt,
             image_data,
             reasoning_effort,
             system_prompt,
         )
+        self._logger.info(
+            "[PAYLOAD PREPARED] provider=%s model=%s effort=%s "
+            "has_prompt=%s has_system=%s has_image=%s payload_meta=(%s)",
+            provider_name,
+            model_name,
+            reasoning_effort,
+            bool(prompt),
+            system_prompt is not None,
+            image_data is not None,
+            _payload_meta(payload),
+        )
+
         url = self._build_url()
         headers = self._build_headers()
 
-        self._logger.debug(
-            "Sending request to %s (provider=%s, model=%s)",
-            url,
-            self._provider.get_provider_type().value,
-            self._provider.model_name,
+        # ------------------------------------------------------------------
+        # Stage 3: request about to send
+        # ------------------------------------------------------------------
+        self._logger.info(
+            "[REQUEST SENDING] provider=%s model=%s url=%s headers=%s timeout=%s",
+            provider_name,
+            model_name,
+            _redact_url(url),
+            _redact_headers(headers),
+            self._provider.timeout,
         )
 
         start = time.time()
-        response = requests.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=self._provider.timeout,
-        )
-        elapsed_ms = int((time.time() - start) * 1000)
-        response.raise_for_status()
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=self._provider.timeout,
+            )
+            elapsed_ms = int((time.time() - start) * 1000)
 
-        response_obj = self._provider.parse_response(response.json())
+            # ------------------------------------------------------------------
+            # Stage 4: response received
+            # ------------------------------------------------------------------
+            self._logger.info(
+                "[RESPONSE RECEIVED] provider=%s model=%s status=%d elapsed_ms=%d",
+                provider_name,
+                model_name,
+                response.status_code,
+                elapsed_ms,
+            )
 
-        self._logger.debug(
-            "Request completed in %d ms (provider=%s)",
-            elapsed_ms,
-            self._provider.get_provider_type().value,
+            response.raise_for_status()
+
+        except requests.HTTPError as exc:
+            elapsed_ms = int((time.time() - start) * 1000)
+            status_code: Optional[int] = (
+                exc.response.status_code if exc.response is not None else None
+            )
+            # レスポンスボディをログ出力 — 524等のエラー原因特定に不可欠
+            response_body = ""
+            if exc.response is not None:
+                try:
+                    response_body = exc.response.text[:500]
+                except Exception:  # noqa: BLE001
+                    response_body = "<unable to read response body>"
+            self._logger.warning(
+                "[REQUEST FAILED] provider=%s model=%s reason=http_error "
+                "status=%s elapsed_ms=%d response_body=%.200s error=%s",
+                provider_name,
+                model_name,
+                status_code,
+                elapsed_ms,
+                response_body,
+                exc,
+            )
+            raise
+        except requests.ReadTimeout as exc:
+            elapsed_ms = int((time.time() - start) * 1000)
+            self._logger.warning(
+                "[REQUEST TIMEOUT] provider=%s model=%s url=%s timeout=%s "
+                "elapsed_ms=%d error=%s",
+                provider_name,
+                model_name,
+                _redact_url(url),
+                self._provider.timeout,
+                elapsed_ms,
+                exc,
+            )
+            self._logger.debug(
+                "[REQUEST FAILED] provider=%s model=%s reason=ReadTimeout "
+                "url=%s timeout=%s elapsed_ms=%d error=%s",
+                provider_name,
+                model_name,
+                _redact_url(url),
+                self._provider.timeout,
+                elapsed_ms,
+                exc,
+            )
+            raise
+        except requests.RequestException as exc:
+            elapsed_ms = int((time.time() - start) * 1000)
+            self._logger.debug(
+                "[REQUEST FAILED] provider=%s model=%s reason=%s "
+                "url=%s timeout=%s elapsed_ms=%d error=%s",
+                provider_name,
+                model_name,
+                type(exc).__name__,
+                _redact_url(url),
+                self._provider.timeout,
+                elapsed_ms,
+                exc,
+            )
+            raise
+
+        # ------------------------------------------------------------------
+        # Stage 5: JSON parsed
+        # ------------------------------------------------------------------
+        raw_json = response.json()
+        self._logger.info(
+            "[JSON PARSED] provider=%s model=%s response_keys=%s",
+            provider_name,
+            model_name,
+            sorted(raw_json.keys()) if isinstance(raw_json, dict) else type(raw_json).__name__,
         )
+
+        response_obj = self._provider.parse_response(raw_json)
 
         # Inject wall-clock timing without mutating the dataclass in-place.
         return dataclasses.replace(response_obj, reasoning_time_ms=elapsed_ms)
@@ -248,6 +531,13 @@ class LLMClient:
         """
 
         def _worker() -> None:
+            provider_name = self._provider.get_provider_type().value
+            model_name = self._provider.model_name
+            self._logger.debug(
+                "[ASYNC WORKER STARTED] provider=%s model=%s",
+                provider_name,
+                model_name,
+            )
             try:
                 result = self.generate(
                     prompt,
@@ -255,10 +545,20 @@ class LLMClient:
                     reasoning_effort=reasoning_effort,
                     system_prompt=system_prompt,
                 )
+                self._logger.debug(
+                    "[ASYNC WORKER DONE] provider=%s model=%s elapsed_ms=%d",
+                    provider_name,
+                    model_name,
+                    result.reasoning_time_ms,
+                )
                 callback(result)
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug(
-                    "generate_async worker raised an exception: %s",
+                    "[REQUEST FAILED] async_worker provider=%s model=%s "
+                    "reason=%s error=%s",
+                    provider_name,
+                    model_name,
+                    type(exc).__name__,
                     exc,
                     exc_info=True,
                 )
@@ -285,7 +585,14 @@ class LLMClient:
         provider_type = self._provider.get_provider_type()
 
         if provider_type == ProviderType.OLLAMA:
-            return f"{self._provider.base_url}/api/chat"
+            # Ollama は /v1/chat/completions (OpenAI互換エンドポイント) を使用する。
+            # native の /api/chat はリバースプロキシ環境(Cloudflare等)で公開されない
+            # ケースが多く、参考実装 (sd-webui-decadetw-auto-prompt-llm) も
+            # /v1/chat/completions を使用している。
+            base = self._provider.base_url
+            if base.endswith("/v1"):
+                return f"{base}/chat/completions"
+            return f"{base}/v1/chat/completions"
 
         if provider_type == ProviderType.GEMINI:
             # GeminiProvider._get_api_url() embeds the API key as a query param.
