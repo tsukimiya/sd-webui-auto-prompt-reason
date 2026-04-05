@@ -6,16 +6,16 @@ a locally-running Ollama inference server (default: ``http://localhost:11434``).
 
 Response parsing
 ----------------
-Two Ollama response shapes are supported:
+Four Ollama response shapes are supported:
 
-* **Shape A** (Ollama ≥ 0.7.0): the ``message`` object contains a dedicated
-  ``thinking`` field alongside ``content``.
-* **Shape B** (Ollama < 0.7.0): chain-of-thought is embedded in ``content``
-  between ``<think>`` / ``</think>`` tags.
-
-The ``</think>`` tag may be absent when the server truncates the response
-(e.g. due to a token limit).  In that case everything after ``<think>`` is
-treated as thinking and ``final_answer`` is set to an empty string.
+* **Shape A** (native ``/api/chat``, Ollama ≥ 0.7.0): the ``message`` object
+  contains a dedicated ``thinking`` field alongside ``content``.
+* **Shape B** (older Ollama): chain-of-thought is embedded in ``content``
+  between ``<think …>`` / ``</think >`` tags.
+* **Shape C** (``/v1/chat/completions`` with thinking model): Ollama exposes
+  a ``reasoning`` field in the message object.  ``content`` may be empty when
+  all tokens are consumed by reasoning.
+* **Shape D** (DeepSeek-style): ``reasoning_content`` field in the message.
 
 Security note
 -------------
@@ -160,9 +160,16 @@ class OllamaProvider(BaseProvider):
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
         """Parse an Ollama API response into a :class:`ReasoningResponse`.
 
-        Handles both Shape A (``thinking`` field) and Shape B (``<think>``
-        tags embedded in ``content``). Uses the OpenAI-compatible
-        ``/v1/chat/completions`` response format (``choices[0].message.content``).
+        Handles four response shapes:
+
+        * **Shape A** — Native ``/api/chat`` (Ollama ≥ 0.7.0):
+          ``message.thinking`` contains the reasoning trace.
+        * **Shape B** — ``<think …>`` tags embedded in ``message.content``
+          (older Ollama versions).
+        * **Shape C** — ``/v1/chat/completions`` with thinking model:
+          ``message.reasoning`` contains the reasoning trace; ``message.content``
+          may be empty when all tokens are consumed by reasoning.
+        * **Shape D** — ``reasoning_content`` field (DeepSeek-style providers).
 
         Parameters
         ----------
@@ -178,15 +185,20 @@ class OllamaProvider(BaseProvider):
         # OpenAI互換形式: choices[0].message.content
         choices: list = raw_response.get("choices", [])
         message: dict[str, Any] = choices[0].get("message", {}) if choices else {}
-        content: str = message.get("content", "")
+        # content may be None when thinking model puts all text in reasoning field
+        raw_content: Any = message.get("content")
+        content: str = raw_content if isinstance(raw_content, str) else (raw_content or "")
+
         logger.info(
             "parse_response: raw keys=%s choices_len=%d message_keys=%s content_len=%d"
-            " has_thinking_field=%s",
+            " has_thinking_field=%s has_reasoning_field=%s has_reasoning_content=%s",
             sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
             len(choices),
             sorted(message.keys()) if isinstance(message, dict) else type(message).__name__,
             len(content),
             "thinking" in message,
+            "reasoning" in message,
+            "reasoning_content" in message,
         )
 
         if not choices:
@@ -200,26 +212,54 @@ class OllamaProvider(BaseProvider):
         final_answer: str = content
         _shape_detected: str = "plain(no thinking)"
 
-        # --- Shape A: Ollama ≥ 0.7.0 has a dedicated ``thinking`` field ---
+        # --- Shape A: Native /api/chat — dedicated ``thinking`` field ---
         if "thinking" in message:
             _shape_detected = "A(dedicated thinking field)"
             thinking_content = message["thinking"] or None
             final_answer = content
+
+        # --- Shape C: /v1/chat/completions — ``reasoning`` field ---
+        # Ollama uses ``reasoning`` for thinking content in the OpenAI-compatible
+        # endpoint.  ``content`` may be empty when the model spends all tokens
+        # on reasoning.
+        elif "reasoning" in message:
+            _shape_detected = "C(reasoning field - OpenAI compat)"
+            reasoning_raw: Any = message.get("reasoning")
+            thinking_content = reasoning_raw if isinstance(reasoning_raw, str) and reasoning_raw else None
+            final_answer = content
+
+        # --- Shape D: ``reasoning_content`` field (DeepSeek-style) ---
+        elif "reasoning_content" in message:
+            _shape_detected = "D(reasoning_content field)"
+            rc_raw: Any = message.get("reasoning_content")
+            thinking_content = rc_raw if isinstance(rc_raw, str) and rc_raw else None
+            final_answer = content
+
+        # --- Shape B: thinking embedded in <think…> tags ---
         else:
-            # --- Shape B: thinking embedded in <think>…</think> tags ---
-            think_start = content.find("<think>")
-            think_end = content.find("</think>")
+            think_start = content.find("<think")
+            think_end = content.find("</think")
 
             if think_start != -1 and think_end != -1:
                 # Both tags present — clean extraction
-                _shape_detected = "B(both think tags)"
-                thinking_content = content[think_start + 7 : think_end]
-                final_answer = content[think_end + 8 :].strip()
+                # Find the closing '>' of the opening tag to skip attributes
+                tag_close = content.find(">", think_start)
+                if tag_close != -1 and tag_close < think_end:
+                    _shape_detected = "B(both think tags)"
+                    thinking_content = content[tag_close + 1 : think_end]
+                    final_answer = content[think_end + 8 :].strip()
+                else:
+                    # Malformed tag — treat as no thinking
+                    _shape_detected = "plain(malformed think tag)"
             elif think_start != -1:
                 # Opening tag only — response was truncated
-                _shape_detected = "B(unclosed think tag — truncated)"
-                thinking_content = content[think_start + 7 :]
-                final_answer = ""
+                tag_close = content.find(">", think_start)
+                if tag_close != -1:
+                    _shape_detected = "B(unclosed think tag — truncated)"
+                    thinking_content = content[tag_close + 1 :]
+                    final_answer = ""
+                else:
+                    _shape_detected = "plain(malformed think tag — no closing >)"
             # else: no tags — keep thinking_content=None, final_answer=content
 
         # OpenAI互換レスポンスのトークンカウント
