@@ -38,7 +38,22 @@ from apr_modules.ui_components import build_thinking_display, build_metrics_disp
 import modules.scripts as scripts
 import gradio as gr
 
+# ---------------------------------------------------------------------------
+# Logging bootstrap
+# ---------------------------------------------------------------------------
+# SD WebUI's logging_config.setup_logging() only installs root handlers when
+# --loglevel / SD_WEBUI_LOG_LEVEL is explicitly set.  When neither is provided
+# the root logger has no handlers and every getLogger(...) call silently drops
+# its messages.  Install a fallback StreamHandler so this extension's logs
+# always reach the console regardless of the host's log configuration.
 _log = logging.getLogger(__name__)
+if not logging.root.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    logging.root.addHandler(_handler)
+    logging.root.setLevel(logging.INFO)
 
 # ---------------------------------------------------------------------------
 # Extension root — used to locate config.yaml at runtime
