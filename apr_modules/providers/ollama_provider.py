@@ -154,7 +154,9 @@ class OllamaProvider(BaseProvider):
             "messages": messages,
             "stream": False,
             "temperature": self._effort_to_temperature(reasoning_effort),
-            "max_tokens": 2048,
+            # max_tokens は意図的に省略 — thinking モデルは reasoning だけで
+            # トークン上限を使い切り content が空になる問題を防ぐため、
+            # Ollama のモデル別デフォルト上限に委ねる。
         }
 
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
