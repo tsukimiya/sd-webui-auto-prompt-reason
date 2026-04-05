@@ -154,9 +154,12 @@ class OllamaProvider(BaseProvider):
             "messages": messages,
             "stream": False,
             "temperature": self._effort_to_temperature(reasoning_effort),
-            # max_tokens は意図的に省略 — thinking モデルは reasoning だけで
-            # トークン上限を使い切り content が空になる問題を防ぐため、
-            # Ollama のモデル別デフォルト上限に委ねる。
+            # 2048 だと thinking モデルが reasoning だけでトークンを使い切り
+            # content が空になる。10000 にすることで reasoning (~8000) +
+            # 最終回答 (~2000) の両方を収める。
+            # Cloudflare リバースプロキシ経由のタイムアウト (524) を避けるため
+            # 無制限にはしない。
+            "max_tokens": 10000,
         }
 
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
