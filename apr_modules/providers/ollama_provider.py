@@ -189,13 +189,15 @@ class OllamaProvider(BaseProvider):
         raw_content: Any = message.get("content")
         content: str = raw_content if isinstance(raw_content, str) else (raw_content or "")
 
-        logger.info(
-            "parse_response: raw keys=%s choices_len=%d message_keys=%s content_len=%d"
-            " has_thinking_field=%s has_reasoning_field=%s has_reasoning_content=%s",
+        logger.warning(
+            "[apr][ollama][parse] raw_keys=%s choices_len=%d message_keys=%s"
+            " content_len=%s content_preview=%.200r"
+            " has_thinking=%s has_reasoning=%s has_reasoning_content=%s",
             sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
             len(choices),
             sorted(message.keys()) if isinstance(message, dict) else type(message).__name__,
-            len(content),
+            len(content) if isinstance(raw_content, str) else repr(type(raw_content).__name__),
+            content[:200],
             "thinking" in message,
             "reasoning" in message,
             "reasoning_content" in message,
@@ -203,7 +205,7 @@ class OllamaProvider(BaseProvider):
 
         if not choices:
             logger.warning(
-                "parse_response: 'choices' field missing or empty — "
+                "[apr][ollama][parse] 'choices' field missing or empty — "
                 "raw_keys=%s  (wrong endpoint or unexpected response format?)",
                 sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
             )
@@ -217,6 +219,14 @@ class OllamaProvider(BaseProvider):
             _shape_detected = "A(dedicated thinking field)"
             thinking_content = message["thinking"] or None
             final_answer = content
+            logger.warning(
+                "[apr][ollama][parse] Shape-A: thinking_len=%s thinking_preview=%.200r"
+                " content_len=%d content_preview=%.200r",
+                len(thinking_content) if thinking_content else "None",
+                (thinking_content or "")[:200],
+                len(content),
+                content[:200],
+            )
 
         # --- Shape C: /v1/chat/completions — ``reasoning`` field ---
         # Ollama uses ``reasoning`` for thinking content in the OpenAI-compatible
@@ -227,6 +237,20 @@ class OllamaProvider(BaseProvider):
             reasoning_raw: Any = message.get("reasoning")
             thinking_content = reasoning_raw if isinstance(reasoning_raw, str) and reasoning_raw else None
             final_answer = content
+            logger.warning(
+                "[apr][ollama][parse] Shape-C: reasoning_len=%s reasoning_preview=%.200r"
+                " content_len=%d content_preview=%.200r",
+                len(reasoning_raw) if isinstance(reasoning_raw, str) else repr(type(reasoning_raw).__name__),
+                (reasoning_raw or "")[:200] if isinstance(reasoning_raw, str) else reasoning_raw,
+                len(content),
+                content[:200],
+            )
+            if not content.strip():
+                logger.warning(
+                    "[apr][ollama][parse] Shape-C: content is EMPTY — "
+                    "final_answer will be empty. reasoning_len=%s",
+                    len(reasoning_raw) if isinstance(reasoning_raw, str) else repr(type(reasoning_raw).__name__),
+                )
 
         # --- Shape D: ``reasoning_content`` field (DeepSeek-style) ---
         elif "reasoning_content" in message:
@@ -234,6 +258,14 @@ class OllamaProvider(BaseProvider):
             rc_raw: Any = message.get("reasoning_content")
             thinking_content = rc_raw if isinstance(rc_raw, str) and rc_raw else None
             final_answer = content
+            logger.warning(
+                "[apr][ollama][parse] Shape-D: reasoning_content_len=%s reasoning_content_preview=%.200r"
+                " content_len=%d content_preview=%.200r",
+                len(rc_raw) if isinstance(rc_raw, str) else repr(type(rc_raw).__name__),
+                (rc_raw or "")[:200] if isinstance(rc_raw, str) else rc_raw,
+                len(content),
+                content[:200],
+            )
 
         # --- Shape B: thinking embedded in <think…> tags ---
         else:
@@ -248,9 +280,22 @@ class OllamaProvider(BaseProvider):
                     _shape_detected = "B(both think tags)"
                     thinking_content = content[tag_close + 1 : think_end]
                     final_answer = content[think_end + 8 :].strip()
+                    logger.warning(
+                        "[apr][ollama][parse] Shape-B(both tags): thinking_len=%d thinking_preview=%.200r"
+                        " final_answer_len=%d final_answer_preview=%.200r",
+                        len(thinking_content),
+                        thinking_content[:200],
+                        len(final_answer),
+                        final_answer[:200],
+                    )
                 else:
                     # Malformed tag — treat as no thinking
                     _shape_detected = "plain(malformed think tag)"
+                    logger.warning(
+                        "[apr][ollama][parse] Shape-B: malformed think tag — "
+                        "treating as plain content. content_preview=%.200r",
+                        content[:200],
+                    )
             elif think_start != -1:
                 # Opening tag only — response was truncated
                 tag_close = content.find(">", think_start)
@@ -258,8 +303,24 @@ class OllamaProvider(BaseProvider):
                     _shape_detected = "B(unclosed think tag — truncated)"
                     thinking_content = content[tag_close + 1 :]
                     final_answer = ""
+                    logger.warning(
+                        "[apr][ollama][parse] Shape-B(unclosed/truncated): thinking_len=%d thinking_preview=%.200r",
+                        len(thinking_content),
+                        thinking_content[:200],
+                    )
                 else:
                     _shape_detected = "plain(malformed think tag — no closing >)"
+                    logger.warning(
+                        "[apr][ollama][parse] plain(no closing >): content_preview=%.200r",
+                        content[:200],
+                    )
+            else:
+                # No think tags at all — plain response
+                logger.warning(
+                    "[apr][ollama][parse] plain(no thinking tags): content_len=%d content_preview=%.200r",
+                    len(content),
+                    content[:200],
+                )
             # else: no tags — keep thinking_content=None, final_answer=content
 
         # OpenAI互換レスポンスのトークンカウント
@@ -268,15 +329,24 @@ class OllamaProvider(BaseProvider):
         prompt_tokens: int = usage.get("prompt_tokens", 0)
 
         # --- 診断ログ: パース結果の確認 ---
-        logger.info(
-            "parse_response: final_answer_len=%d thinking_len=%s"
-            " shape=%s completion_tokens=%d prompt_tokens=%d",
-            len(final_answer.strip()),
-            len(thinking_content) if thinking_content else "None",
+        logger.warning(
+            "[apr][ollama][parse] RESULT: shape=%s final_answer_len=%d"
+            " final_answer_preview=%.200r thinking_len=%s"
+            " completion_tokens=%d prompt_tokens=%d",
             _shape_detected,
+            len(final_answer.strip()),
+            final_answer.strip()[:200],
+            len(thinking_content) if thinking_content else "None",
             completion_tokens,
             prompt_tokens,
         )
+
+        if not final_answer.strip():
+            logger.warning(
+                "[apr][ollama][parse] WARNING: final_answer is EMPTY after shape=%s — "
+                "prompt injection will have no effect!",
+                _shape_detected,
+            )
 
         return ReasoningResponse(
             final_answer=final_answer.strip(),

@@ -487,6 +487,36 @@ class LLMClient:
             sorted(raw_json.keys()) if isinstance(raw_json, dict) else type(raw_json).__name__,
         )
 
+        # choices[0].message の全フィールドと値のプレビューを出力
+        # これにより reasoning/content/thinking の有無と内容が一目でわかる
+        if isinstance(raw_json, dict):
+            _choices = raw_json.get("choices", [])
+            if _choices and isinstance(_choices[0], dict):
+                _msg = _choices[0].get("message", {})
+                _msg_keys = sorted(_msg.keys()) if isinstance(_msg, dict) else []
+                _content_val = _msg.get("content") if isinstance(_msg, dict) else None
+                _reasoning_val = _msg.get("reasoning") if isinstance(_msg, dict) else None
+                _thinking_val = _msg.get("thinking") if isinstance(_msg, dict) else None
+                _rc_val = _msg.get("reasoning_content") if isinstance(_msg, dict) else None
+                self._logger.warning(
+                    "[apr][client][MESSAGE] provider=%s model=%s"
+                    " message_keys=%s"
+                    " content_len=%s content_preview=%.150r"
+                    " reasoning_len=%s reasoning_preview=%.150r"
+                    " thinking_len=%s thinking_preview=%.100r"
+                    " reasoning_content_len=%s",
+                    provider_name,
+                    model_name,
+                    _msg_keys,
+                    len(_content_val) if isinstance(_content_val, str) else repr(type(_content_val).__name__),
+                    (_content_val or "")[:150] if isinstance(_content_val, str) else _content_val,
+                    len(_reasoning_val) if isinstance(_reasoning_val, str) else repr(type(_reasoning_val).__name__),
+                    (_reasoning_val or "")[:150] if isinstance(_reasoning_val, str) else _reasoning_val,
+                    len(_thinking_val) if isinstance(_thinking_val, str) else repr(type(_thinking_val).__name__),
+                    (_thinking_val or "")[:100] if isinstance(_thinking_val, str) else _thinking_val,
+                    len(_rc_val) if isinstance(_rc_val, str) else repr(type(_rc_val).__name__),
+                )
+
         response_obj = self._provider.parse_response(raw_json)
 
         # Inject wall-clock timing without mutating the dataclass in-place.

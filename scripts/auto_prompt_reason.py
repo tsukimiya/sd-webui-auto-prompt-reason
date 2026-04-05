@@ -340,12 +340,20 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 response.reasoning_time_ms,
             )
 
-            # final_answerが空文字列の場合は警告
+            # final_answerが空文字列の場合は警告（原因特定のため raw_response の message 内容も出力）
             if not response.final_answer or not response.final_answer.strip():
+                _raw = response.raw_response
+                _msg_dump: Any = None
+                if isinstance(_raw, dict):
+                    _choices = _raw.get("choices", [])
+                    if _choices and isinstance(_choices[0], dict):
+                        _msg_dump = _choices[0].get("message")
                 _log.warning(
-                    "AutoPromptReason.process: LLM returned empty final_answer — "
-                    "raw_response_keys=%s",
-                    sorted(response.raw_response.keys()) if isinstance(response.raw_response, dict) else type(response.raw_response).__name__,
+                    "[apr][script][inject] WARNING: final_answer is EMPTY — "
+                    "prompt will NOT be changed. raw_response_keys=%s"
+                    " choices[0].message=%r",
+                    sorted(_raw.keys()) if isinstance(_raw, dict) else type(_raw).__name__,
+                    _msg_dump,
                 )
 
             # Persist response for potential use by postprocess().
