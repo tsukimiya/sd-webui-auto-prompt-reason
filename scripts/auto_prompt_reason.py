@@ -77,7 +77,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
     * :py:meth:`show` — visibility control; always shown in both tabs.
     * :py:meth:`ui` — builds and returns the Gradio component list.
     * :py:meth:`process` — called just before image generation; injects the LLM
-      response into the processing object's ``prompt`` attribute.
+      response into ``p.all_prompts`` for all images in the batch.
     """
 
     def __init__(self) -> None:
@@ -227,8 +227,9 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
         Parameters
         ----------
         p:
-            SD WebUI processing object.  This method reads and writes
-            ``p.prompt`` only.
+            SD WebUI processing object.  This method writes to
+            ``p.all_prompts`` (the authoritative per-batch prompt list used
+            by the sampler).
         enabled:
             Whether the extension is active for this generation.
         provider_type:
@@ -257,17 +258,21 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             SD WebUI continues its normal processing pipeline regardless of
             the return value.
         """
-        _msg = (
-            f"[AutoPromptReason] process: invoked enabled={enabled!r}"
-            f" provider={provider_type!r} model={model_name!r}"
-            f" effort={reasoning_effort!r} base_url={base_url!r}"
-            f" user_prompt_len={len(user_prompt)}"
+        _log.info(
+            "AutoPromptReason.process: invoked enabled=%r provider=%r model=%r"
+            " effort=%r base_url=%r has_api_key=%r"
+            " user_prompt_len=%d has_system_prompt=%r",
+            enabled,
+            provider_type,
+            model_name,
+            reasoning_effort,
+            base_url,
+            bool(api_key),
+            len(user_prompt),
+            bool(system_prompt),
         )
-        print(_msg)
-        _log.info(_msg)
 
         if not enabled:
-            print("[AutoPromptReason] process: extension disabled — skipping LLM call.")
             _log.info(
                 "AutoPromptReason.process: extension disabled — skipping LLM call."
             )
@@ -279,7 +284,6 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             config = self._load_config()
             injection_mode: str = config.get("prompt_injection", "append")
             provider_timeout = cast(tuple[int, int], config.get("provider_timeout", _DEFAULT_PROVIDER_TIMEOUT))
-            print(f"[AutoPromptReason] config loaded injection_mode={injection_mode!r} timeout={provider_timeout!r}")
             _log.info(
                 "AutoPromptReason.process: config loaded injection_mode=%r provider_timeout=%r",
                 injection_mode,
@@ -295,7 +299,6 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             if api_key:
                 kwargs["api_key"] = SecretStr(api_key)
 
-            print(f"[AutoPromptReason] creating LLMClient provider={provider_type!r} model={model_name!r} timeout={provider_timeout!r}")
             _log.info(
                 "AutoPromptReason.process: creating LLMClient"
                 " provider=%r model=%r base_url=%r has_api_key=%r timeout=%r",
@@ -306,14 +309,12 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 provider_timeout,
             )
             client = LLMClient.create(provider_type, **kwargs)
-            print(f"[AutoPromptReason] LLMClient created: {type(client).__name__}")
             _log.info("AutoPromptReason.process: LLMClient.create() returned %r", type(client).__name__)
 
             # Treat empty string as "no system prompt" so the provider falls
             # back to its own defaults.
             effective_system_prompt: Optional[str] = system_prompt or None
 
-            print(f"[AutoPromptReason] calling generate() model={model_name!r} effort={reasoning_effort!r} user_prompt_len={len(user_prompt)}")
             _log.info(
                 "AutoPromptReason.process: calling client.generate()"
                 " provider=%r model=%r effort=%r"
@@ -329,8 +330,6 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 reasoning_effort=reasoning_effort,
                 system_prompt=effective_system_prompt,
             )
-            print(f"[AutoPromptReason] generate() done final_answer_len={len(response.final_answer)} tokens={response.total_tokens}")
-            print(f"[AutoPromptReason] final_answer={response.final_answer!r}")
             _log.info(
                 "AutoPromptReason.process: generate() returned"
                 " final_answer=%.300r thinking_content=%s"
@@ -366,8 +365,9 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
 
             # Inject the LLM answer into p.all_prompts (the authoritative list
             # used by the sampler).  p.prompt is only used once by
-            # setup_prompts() to build all_prompts; writing to it after that
-            # point has no effect on the actual generation.
+            # setup_prompts() to build all_prompts before process() is called;
+            # writing to p.prompt afterwards has no effect on the actual
+            # generation.  Iterate over all entries to cover batch generation.
             # Reference: xlinx/sd-webui-decadetw-auto-prompt-llm uses the
             # same p.all_prompts loop pattern.
             answer = response.final_answer
@@ -386,12 +386,6 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                     p.all_prompts[i] = f"{original}{sep}{answer}"
 
             injected_sample = p.all_prompts[0] if p.all_prompts else ""
-            print(
-                f"[AutoPromptReason] prompt injected mode={injection_mode!r}"
-                f" all_prompts_count={len(p.all_prompts)}"
-                f" original_len={original_prompt_len} result_len={len(injected_sample)}"
-                f"\n  injected_prompt={injected_sample[:200]!r}{'...' if len(injected_sample) > 200 else ''}"
-            )
             _log.info(
                 "AutoPromptReason.process: prompt injected"
                 " mode=%r provider=%r all_prompts_count=%d"
@@ -405,16 +399,7 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 injected_sample,
             )
 
-        except Exception as _exc:  # noqa: BLE001
-            import traceback
-            _tb = traceback.format_exc()
-            print(
-                f"[AutoPromptReason] ERROR during LLM generation"
-                f" provider={provider_type!r} model={model_name!r}"
-                f" base_url={base_url!r}"
-                f" timeout={provider_timeout if 'provider_timeout' in locals() else _DEFAULT_PROVIDER_TIMEOUT!r}"
-                f"\n{_tb}"
-            )
+        except Exception:  # noqa: BLE001
             _log.exception(
                 "AutoPromptReason.process: error during LLM generation"
                 " provider=%r model=%r base_url=%r timeout=%r — "
