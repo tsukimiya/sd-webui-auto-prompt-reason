@@ -373,6 +373,11 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 # Default: append
                 p.prompt = f"{p.prompt}, {response.final_answer}"
 
+            print(
+                f"[AutoPromptReason] prompt injected mode={injection_mode!r}"
+                f" original_len={original_prompt_len} result_len={len(p.prompt)}"
+                f"\n  injected_prompt={p.prompt[:200]!r}{'...' if len(p.prompt) > 200 else ''}"
+            )
             _log.info(
                 "AutoPromptReason.process: prompt injected"
                 " mode=%r provider=%r original_len=%d result_len=%d"
