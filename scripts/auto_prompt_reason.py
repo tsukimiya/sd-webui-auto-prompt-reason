@@ -364,30 +364,45 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 len(self._history),
             )
 
-            # Inject the LLM answer into the processing prompt.
-            original_prompt_len = len(p.prompt)
-            if injection_mode == "replace":
-                p.prompt = response.final_answer
-            elif injection_mode == "prepend":
-                p.prompt = f"{response.final_answer}, {p.prompt}"
-            else:
-                # Default: append
-                p.prompt = f"{p.prompt}, {response.final_answer}"
+            # Inject the LLM answer into p.all_prompts (the authoritative list
+            # used by the sampler).  p.prompt is only used once by
+            # setup_prompts() to build all_prompts; writing to it after that
+            # point has no effect on the actual generation.
+            # Reference: xlinx/sd-webui-decadetw-auto-prompt-llm uses the
+            # same p.all_prompts loop pattern.
+            answer = response.final_answer
+            original_prompt_len = len(p.all_prompts[0]) if p.all_prompts else len(p.prompt)
 
+            for i in range(len(p.all_prompts)):
+                original = p.all_prompts[i]
+                if injection_mode == "replace":
+                    p.all_prompts[i] = answer
+                elif injection_mode == "prepend":
+                    sep = ", " if original else ""
+                    p.all_prompts[i] = f"{answer}{sep}{original}"
+                else:
+                    # Default: append
+                    sep = ", " if original else ""
+                    p.all_prompts[i] = f"{original}{sep}{answer}"
+
+            injected_sample = p.all_prompts[0] if p.all_prompts else ""
             print(
                 f"[AutoPromptReason] prompt injected mode={injection_mode!r}"
-                f" original_len={original_prompt_len} result_len={len(p.prompt)}"
-                f"\n  injected_prompt={p.prompt[:200]!r}{'...' if len(p.prompt) > 200 else ''}"
+                f" all_prompts_count={len(p.all_prompts)}"
+                f" original_len={original_prompt_len} result_len={len(injected_sample)}"
+                f"\n  injected_prompt={injected_sample[:200]!r}{'...' if len(injected_sample) > 200 else ''}"
             )
             _log.info(
                 "AutoPromptReason.process: prompt injected"
-                " mode=%r provider=%r original_len=%d result_len=%d"
+                " mode=%r provider=%r all_prompts_count=%d"
+                " original_len=%d result_len=%d"
                 " injected_prompt=%.500r",
                 injection_mode,
                 provider_type,
+                len(p.all_prompts),
                 original_prompt_len,
-                len(p.prompt),
-                p.prompt,
+                len(injected_sample),
+                injected_sample,
             )
 
         except Exception as _exc:  # noqa: BLE001
