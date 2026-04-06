@@ -258,8 +258,8 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             SD WebUI continues its normal processing pipeline regardless of
             the return value.
         """
-        _log.info(
-            "AutoPromptReason.process: invoked enabled=%r provider=%r model=%r"
+        _log.warning(
+            "[apr][script][process] invoked enabled=%r provider=%r model=%r"
             " effort=%r base_url=%r has_api_key=%r"
             " user_prompt_len=%d has_system_prompt=%r",
             enabled,
@@ -273,8 +273,8 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
         )
 
         if not enabled:
-            _log.info(
-                "AutoPromptReason.process: extension disabled — skipping LLM call."
+            _log.warning(
+                "[apr][script][process] extension disabled — skipping LLM call."
             )
             return None
 
@@ -284,8 +284,8 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             config = self._load_config()
             injection_mode: str = config.get("prompt_injection", "append")
             provider_timeout = cast(tuple[int, int], config.get("provider_timeout", _DEFAULT_PROVIDER_TIMEOUT))
-            _log.info(
-                "AutoPromptReason.process: config loaded injection_mode=%r provider_timeout=%r",
+            _log.warning(
+                "[apr][script][process] config loaded injection_mode=%r provider_timeout=%r",
                 injection_mode,
                 provider_timeout,
             )
@@ -299,8 +299,8 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
             if api_key:
                 kwargs["api_key"] = SecretStr(api_key)
 
-            _log.info(
-                "AutoPromptReason.process: creating LLMClient"
+            _log.warning(
+                "[apr][script][process] creating LLMClient"
                 " provider=%r model=%r base_url=%r has_api_key=%r timeout=%r",
                 provider_type,
                 model_name,
@@ -309,14 +309,14 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 provider_timeout,
             )
             client = LLMClient.create(provider_type, **kwargs)
-            _log.info("AutoPromptReason.process: LLMClient.create() returned %r", type(client).__name__)
+            _log.warning("[apr][script][process] LLMClient.create() returned %r", type(client).__name__)
 
             # Treat empty string as "no system prompt" so the provider falls
             # back to its own defaults.
             effective_system_prompt: Optional[str] = system_prompt or None
 
-            _log.info(
-                "AutoPromptReason.process: calling client.generate()"
+            _log.warning(
+                "[apr][script][process] calling client.generate()"
                 " provider=%r model=%r effort=%r"
                 " user_prompt_len=%d has_system_prompt=%r",
                 provider_type,
@@ -330,10 +330,11 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                 reasoning_effort=reasoning_effort,
                 system_prompt=effective_system_prompt,
             )
-            _log.info(
-                "AutoPromptReason.process: generate() returned"
-                " final_answer=%.300r thinking_content=%s"
+            _log.warning(
+                "[apr][script][process] generate() returned"
+                " final_answer_len=%d final_answer=%.300r thinking_content=%s"
                 " total_tokens=%r reasoning_time_ms=%r",
+                len(response.final_answer),
                 response.final_answer,
                 "present" if response.thinking_content else "None",
                 response.total_tokens,
@@ -394,9 +395,8 @@ class AutoPromptReason(scripts.Script):  # type: ignore[misc,valid-type]
                     p.all_prompts[i] = f"{original}{sep}{answer}"
 
             injected_sample = p.all_prompts[0] if p.all_prompts else ""
-            _log.info(
-                "AutoPromptReason.process: prompt injected"
-                " mode=%r provider=%r all_prompts_count=%d"
+            _log.warning(
+                "[apr][script][inject] mode=%r provider=%r all_prompts_count=%d"
                 " original_len=%d result_len=%d"
                 " injected_prompt=%.500r",
                 injection_mode,
