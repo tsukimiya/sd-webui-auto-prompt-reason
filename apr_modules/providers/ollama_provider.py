@@ -164,8 +164,9 @@ class OllamaProvider(BaseProvider):
             "stream": True,
             "temperature": self._effort_to_temperature(reasoning_effort),
             # ストリーミングにより Cloudflare 524 タイムアウトを回避する。
-            # max_tokens は thinking (~8000) + 最終回答 (~2000) の両方を収める値に設定。
-            "max_tokens": 10000,
+            # thinking モデルは reasoning だけで3〜4万トークン消費するため、
+            # reasoning (~40000) + 最終回答 (~2000) の両方を収める値に設定。
+            "max_tokens": 50000,
         }
 
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
