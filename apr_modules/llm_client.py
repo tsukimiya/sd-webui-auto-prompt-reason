@@ -29,6 +29,8 @@ visible:
    ``requests.post`` is called.  Gemini ``?key=`` is redacted.
    ``Authorization`` header value is never logged.
 4. ``[RESPONSE RECEIVED]`` — HTTP status code and elapsed time logged.
+   For Ollama streaming requests, ``(streaming)`` is appended to this line.
+5. ``[STREAM]``             — Ollama-only; number of SSE lines received.
 5. ``[JSON PARSED]``       — top-level keys of the parsed JSON body logged.
 6. ``[REQUEST TIMEOUT]``   — explicit timeout log including URL and timeout.
 7. ``[REQUEST FAILED]``    — status code (if HTTP) or exception type for any
@@ -393,6 +395,70 @@ class LLMClient:
         )
 
         start = time.time()
+
+        # ------------------------------------------------------------------
+        # Ollama: ストリーミングパス（Cloudflare 524 タイムアウト回避）
+        # ------------------------------------------------------------------
+        if self._provider.get_provider_type() == ProviderType.OLLAMA:
+            try:
+                response_obj = self._generate_ollama_streaming(
+                    url, headers, payload, start
+                )
+            except requests.HTTPError as exc:
+                elapsed_ms = int((time.time() - start) * 1000)
+                status_code: Optional[int] = (
+                    exc.response.status_code if exc.response is not None else None
+                )
+                response_body = ""
+                if exc.response is not None:
+                    try:
+                        response_body = exc.response.text[:500]
+                    except Exception:  # noqa: BLE001
+                        response_body = "<unable to read response body>"
+                self._logger.warning(
+                    "[REQUEST FAILED] provider=%s model=%s reason=http_error "
+                    "status=%s elapsed_ms=%d response_body=%.200s error=%s",
+                    provider_name,
+                    model_name,
+                    status_code,
+                    elapsed_ms,
+                    response_body,
+                    exc,
+                )
+                raise
+            except requests.ReadTimeout as exc:
+                elapsed_ms = int((time.time() - start) * 1000)
+                self._logger.warning(
+                    "[REQUEST TIMEOUT] provider=%s model=%s url=%s timeout=%s "
+                    "elapsed_ms=%d error=%s",
+                    provider_name,
+                    model_name,
+                    _redact_url(url),
+                    self._provider.timeout,
+                    elapsed_ms,
+                    exc,
+                )
+                raise
+            except requests.RequestException as exc:
+                elapsed_ms = int((time.time() - start) * 1000)
+                self._logger.debug(
+                    "[REQUEST FAILED] provider=%s model=%s reason=%s "
+                    "url=%s timeout=%s elapsed_ms=%d error=%s",
+                    provider_name,
+                    model_name,
+                    type(exc).__name__,
+                    _redact_url(url),
+                    self._provider.timeout,
+                    elapsed_ms,
+                    exc,
+                )
+                raise
+            elapsed_ms = int((time.time() - start) * 1000)
+            return dataclasses.replace(response_obj, reasoning_time_ms=elapsed_ms)
+
+        # ------------------------------------------------------------------
+        # 非 Ollama: 既存の非ストリーミングパス
+        # ------------------------------------------------------------------
         try:
             response = requests.post(
                 url,
@@ -417,24 +483,24 @@ class LLMClient:
 
         except requests.HTTPError as exc:
             elapsed_ms = int((time.time() - start) * 1000)
-            status_code: Optional[int] = (
+            status_code_non_ollama: Optional[int] = (
                 exc.response.status_code if exc.response is not None else None
             )
-            # レスポンスボディをログ出力 — 524等のエラー原因特定に不可欠
-            response_body = ""
+            # レスポンスボディをログ出力 — エラー原因特定に不可欠
+            response_body_non_ollama = ""
             if exc.response is not None:
                 try:
-                    response_body = exc.response.text[:500]
+                    response_body_non_ollama = exc.response.text[:500]
                 except Exception:  # noqa: BLE001
-                    response_body = "<unable to read response body>"
+                    response_body_non_ollama = "<unable to read response body>"
             self._logger.warning(
                 "[REQUEST FAILED] provider=%s model=%s reason=http_error "
                 "status=%s elapsed_ms=%d response_body=%.200s error=%s",
                 provider_name,
                 model_name,
-                status_code,
+                status_code_non_ollama,
                 elapsed_ms,
-                response_body,
+                response_body_non_ollama,
                 exc,
             )
             raise
@@ -602,6 +668,67 @@ class LLMClient:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _generate_ollama_streaming(
+        self,
+        url: str,
+        headers: dict,
+        payload: dict,
+        elapsed_start: float,
+    ) -> ReasoningResponse:
+        """Ollama 専用: ``stream=True`` で SSE を受信して :class:`ReasoningResponse` を返す。
+
+        Cloudflare 等のリバースプロキシが設定する 100 秒タイムアウト (524 エラー) を
+        回避するため、Ollama へのリクエストはストリーミングで行う。
+        データが流れ続けている間はプロキシが接続を切断しない。
+
+        Parameters
+        ----------
+        url:
+            POST 先の完全な URL。
+        headers:
+            リクエストヘッダー。
+        payload:
+            JSON リクエストボディ。``"stream": True`` が含まれていること。
+        elapsed_start:
+            :func:`time.time` で取得した計測開始時刻。
+
+        Returns
+        -------
+        ReasoningResponse
+            ``parse_streaming_chunks`` で構築した正規化済みレスポンス。
+            ``reasoning_time_ms`` は呼び出し元が設定する。
+        """
+        provider_name = self._provider.get_provider_type().value
+        model_name = self._provider.model_name
+
+        response = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=self._provider.timeout,
+            stream=True,
+        )
+        elapsed_ms = int((time.time() - elapsed_start) * 1000)
+        self._logger.info(
+            "[RESPONSE RECEIVED] provider=%s model=%s status=%d elapsed_ms=%d (streaming)",
+            provider_name,
+            model_name,
+            response.status_code,
+            elapsed_ms,
+        )
+        response.raise_for_status()
+
+        raw_lines: list[str] = list(response.iter_lines(decode_unicode=True))
+        self._logger.warning(
+            "[apr][client][STREAM] provider=%s model=%s lines=%d",
+            provider_name,
+            model_name,
+            len(raw_lines),
+        )
+
+        ollama_provider: OllamaProvider = self._provider  # type: ignore[assignment]
+        return ollama_provider.parse_streaming_chunks(raw_lines)
 
     def _build_url(self) -> str:
         """Construct the full endpoint URL for the configured provider.

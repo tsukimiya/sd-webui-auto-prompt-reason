@@ -4,6 +4,14 @@ Ollama provider implementation for sd-webui-auto-prompt-reason.
 This module implements the :class:`OllamaProvider` concrete class that talks to
 a locally-running Ollama inference server (default: ``http://localhost:11434``).
 
+Streaming
+---------
+Requests are sent with ``"stream": true`` to avoid Cloudflare 524 timeouts when
+the server sits behind a reverse proxy.  :py:meth:`parse_streaming_chunks`
+accumulates the SSE delta chunks into a single synthetic response dict that has
+the same shape as a non-streaming ``/v1/chat/completions`` reply, which is then
+passed to :py:meth:`parse_response` for the usual Shape A/B/C/D logic.
+
 Response parsing
 ----------------
 Four Ollama response shapes are supported:
@@ -25,6 +33,7 @@ and is **never** logged or printed.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional
 
@@ -152,13 +161,10 @@ class OllamaProvider(BaseProvider):
         return {
             "model": self.model_name,
             "messages": messages,
-            "stream": False,
+            "stream": True,
             "temperature": self._effort_to_temperature(reasoning_effort),
-            # 2048 だと thinking モデルが reasoning だけでトークンを使い切り
-            # content が空になる。10000 にすることで reasoning (~8000) +
-            # 最終回答 (~2000) の両方を収める。
-            # Cloudflare リバースプロキシ経由のタイムアウト (524) を避けるため
-            # 無制限にはしない。
+            # ストリーミングにより Cloudflare 524 タイムアウトを回避する。
+            # max_tokens は thinking (~8000) + 最終回答 (~2000) の両方を収める値に設定。
             "max_tokens": 10000,
         }
 
@@ -366,6 +372,100 @@ class OllamaProvider(BaseProvider):
             provider="ollama",
             raw_response=raw_response,
         )
+
+    # ------------------------------------------------------------------
+    # Streaming support
+    # ------------------------------------------------------------------
+
+    def parse_streaming_chunks(self, raw_lines: list[str]) -> ReasoningResponse:
+        """Accumulate SSE lines from a streaming ``/v1/chat/completions`` response.
+
+        Each line has the form ``data: <JSON>`` or ``data: [DONE]``.
+        Delta chunks carry ``choices[0].delta`` with ``content`` and/or
+        ``reasoning`` fields.  The method collects all deltas, builds a
+        synthetic non-streaming message dict, and delegates to
+        :py:meth:`parse_response` so the usual Shape A/B/C/D logic applies.
+
+        Parameters
+        ----------
+        raw_lines:
+            Raw text lines from the HTTP response body (``iter_lines()``).
+
+        Returns
+        -------
+        ReasoningResponse
+            Normalised provider-agnostic response.
+        """
+        accumulated_content: list[str] = []
+        accumulated_reasoning: list[str] = []
+        accumulated_thinking: list[str] = []
+        finish_reason: Optional[str] = None
+        prompt_tokens: int = 0
+        completion_tokens: int = 0
+
+        for raw_line in raw_lines:
+            line = raw_line.strip() if isinstance(raw_line, str) else raw_line.decode("utf-8", errors="replace").strip()
+            if not line or line == "data: [DONE]":
+                continue
+            if line.startswith("data: "):
+                line = line[6:]
+            try:
+                chunk: dict[str, Any] = json.loads(line)
+            except json.JSONDecodeError:
+                logger.warning("[apr][ollama][stream] failed to parse SSE line: %.200r", line)
+                continue
+
+            choices: list = chunk.get("choices", [])
+            if choices and isinstance(choices[0], dict):
+                delta: dict[str, Any] = choices[0].get("delta", {})
+                if isinstance(delta, dict):
+                    c = delta.get("content") or ""
+                    r = delta.get("reasoning") or ""
+                    t = delta.get("thinking") or ""
+                    if isinstance(c, str):
+                        accumulated_content.append(c)
+                    if isinstance(r, str):
+                        accumulated_reasoning.append(r)
+                    if isinstance(t, str):
+                        accumulated_thinking.append(t)
+                fr = choices[0].get("finish_reason")
+                if fr:
+                    finish_reason = fr
+
+            # 最終チャンクに usage が含まれる場合がある
+            usage: dict[str, Any] = chunk.get("usage", {})
+            if usage:
+                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                completion_tokens = usage.get("completion_tokens", completion_tokens)
+
+        content_str = "".join(accumulated_content)
+        reasoning_str = "".join(accumulated_reasoning)
+        thinking_str = "".join(accumulated_thinking)
+
+        logger.warning(
+            "[apr][ollama][stream] accumulated content_len=%d reasoning_len=%d"
+            " thinking_len=%d finish_reason=%r",
+            len(content_str),
+            len(reasoning_str),
+            len(thinking_str),
+            finish_reason,
+        )
+
+        # 非ストリーミングレスポンスと同じ形式の合成 dict を作り parse_response に委ねる
+        message: dict[str, Any] = {"role": "assistant", "content": content_str}
+        if reasoning_str:
+            message["reasoning"] = reasoning_str
+        if thinking_str:
+            message["thinking"] = thinking_str
+
+        synthetic: dict[str, Any] = {
+            "choices": [{"message": message, "finish_reason": finish_reason}],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            },
+        }
+        return self.parse_response(synthetic)
 
     # ------------------------------------------------------------------
     # Private helpers
