@@ -95,6 +95,174 @@ def ollama_raw_shape_b() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Raw API response fixtures — Ollama via /v1/chat/completions (OpenAI-compat)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ollama_v1_shape_a() -> dict[str, Any]:
+    """Ollama via /v1/chat/completions Shape A: dedicated ``thinking`` field."""
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": "qwen3.5:7b",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "a cat sitting",
+                    "thinking": "Let me think",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 80,
+            "completion_tokens": 20,
+            "total_tokens": 100,
+        },
+    }
+
+
+@pytest.fixture
+def ollama_v1_shape_b() -> dict[str, Any]:
+    """Ollama via /v1/chat/completions Shape B: think tags in content."""
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": "qwen3.5:7b",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "<think Let me think</think a cat sitting",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 80,
+            "completion_tokens": 20,
+            "total_tokens": 100,
+        },
+    }
+
+
+@pytest.fixture
+def ollama_v1_shape_c() -> dict[str, Any]:
+    """Ollama via /v1/chat/completions Shape C: ``reasoning`` field.
+
+    This is the format Ollama uses for thinking models (e.g. qwen3.5)
+    when accessed via the OpenAI-compatible endpoint.
+    ``content`` may be empty when all tokens are consumed by reasoning.
+    """
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": "jaahas/qwen3.5-uncensored",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "a cat sitting on a bench",
+                    "reasoning": "Let me think about this prompt carefully",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 80,
+            "completion_tokens": 20,
+            "total_tokens": 100,
+        },
+    }
+
+
+@pytest.fixture
+def ollama_v1_shape_c_empty_content() -> dict[str, Any]:
+    """Ollama via /v1/chat/completions Shape C: reasoning field with empty content.
+
+    Known Ollama bug: content is empty when thinking model consumes all tokens.
+    """
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": "jaahas/qwen3.5-uncensored",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning": "The user wants a prompt for image generation...",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 80,
+            "completion_tokens": 3508,
+            "total_tokens": 3588,
+        },
+    }
+
+
+@pytest.fixture
+def ollama_v1_shape_c_null_content() -> dict[str, Any]:
+    """Ollama via /v1/chat/completions Shape C: content is null/None."""
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": "jaahas/qwen3.5-uncensored",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning": "Analyzing the image prompt requirements...",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 80,
+            "completion_tokens": 100,
+            "total_tokens": 180,
+        },
+    }
+
+
+@pytest.fixture
+def ollama_v1_shape_d() -> dict[str, Any]:
+    """Ollama via /v1/chat/completions Shape D: ``reasoning_content`` field (DeepSeek-style)."""
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": "deepseek-r1",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "a cat sitting",
+                    "reasoning_content": "Deep reasoning trace here",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 80,
+            "completion_tokens": 20,
+            "total_tokens": 100,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # Raw API response fixtures — OpenAI-compatible
 # ---------------------------------------------------------------------------
 

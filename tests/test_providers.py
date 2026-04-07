@@ -121,40 +121,79 @@ class TestOllamaProvider:
         medium_payload = provider.build_request("x", reasoning_effort="medium")
         high_payload = provider.build_request("x", reasoning_effort="high")
 
-        assert low_payload["options"]["temperature"] == 0.8
-        assert medium_payload["options"]["temperature"] == 0.5
-        assert high_payload["options"]["temperature"] == 0.2
+        assert low_payload["temperature"] == 0.8
+        assert medium_payload["temperature"] == 0.5
+        assert high_payload["temperature"] == 0.2
 
     # --- parse_response ---
 
     def test_ollama_parse_response_shape_a(
-        self, ollama_raw_shape_a: dict[str, Any]
+        self, ollama_v1_shape_a: dict[str, Any]
     ) -> None:
         """Shape A: dedicated thinking field is parsed correctly."""
         provider = self._make_provider()
-        result = provider.parse_response(ollama_raw_shape_a)
+        result = provider.parse_response(ollama_v1_shape_a)
 
         assert result.thinking_content == "Let me think"
         assert result.final_answer == "a cat sitting"
 
     def test_ollama_parse_response_shape_b(
-        self, ollama_raw_shape_b: dict[str, Any]
+        self, ollama_v1_shape_b: dict[str, Any]
     ) -> None:
-        """Shape B: <think> tags are extracted into thinking_content."""
+        """Shape B: think tags are extracted into thinking_content."""
         provider = self._make_provider()
-        result = provider.parse_response(ollama_raw_shape_b)
+        result = provider.parse_response(ollama_v1_shape_b)
 
         assert result.thinking_content == "Let me think"
         assert result.final_answer == "a cat sitting"
 
-    def test_ollama_parse_response_token_counts(
-        self, ollama_raw_shape_a: dict[str, Any]
+    def test_ollama_parse_response_shape_c(
+        self, ollama_v1_shape_c: dict[str, Any]
     ) -> None:
-        """eval_count and prompt_eval_count are mapped to token fields."""
+        """Shape C: ``reasoning`` field from /v1/chat/completions thinking model."""
         provider = self._make_provider()
-        result = provider.parse_response(ollama_raw_shape_a)
+        result = provider.parse_response(ollama_v1_shape_c)
 
-        # eval_count=20, prompt_eval_count=80 → total=100
+        assert result.thinking_content == "Let me think about this prompt carefully"
+        assert result.final_answer == "a cat sitting on a bench"
+
+    def test_ollama_parse_response_shape_c_empty_content(
+        self, ollama_v1_shape_c_empty_content: dict[str, Any]
+    ) -> None:
+        """Shape C: reasoning field with empty content (known Ollama bug)."""
+        provider = self._make_provider()
+        result = provider.parse_response(ollama_v1_shape_c_empty_content)
+
+        assert result.thinking_content == "The user wants a prompt for image generation..."
+        assert result.final_answer == ""
+
+    def test_ollama_parse_response_shape_c_null_content(
+        self, ollama_v1_shape_c_null_content: dict[str, Any]
+    ) -> None:
+        """Shape C: content is None/null — does not crash."""
+        provider = self._make_provider()
+        result = provider.parse_response(ollama_v1_shape_c_null_content)
+
+        assert result.thinking_content == "Analyzing the image prompt requirements..."
+        assert result.final_answer == ""
+
+    def test_ollama_parse_response_shape_d(
+        self, ollama_v1_shape_d: dict[str, Any]
+    ) -> None:
+        """Shape D: ``reasoning_content`` field (DeepSeek-style)."""
+        provider = self._make_provider()
+        result = provider.parse_response(ollama_v1_shape_d)
+
+        assert result.thinking_content == "Deep reasoning trace here"
+        assert result.final_answer == "a cat sitting"
+
+    def test_ollama_parse_response_token_counts(
+        self, ollama_v1_shape_a: dict[str, Any]
+    ) -> None:
+        """completion_tokens and prompt_tokens are mapped correctly."""
+        provider = self._make_provider()
+        result = provider.parse_response(ollama_v1_shape_a)
+
         assert result.completion_tokens == 20
         assert result.total_tokens == 100
 

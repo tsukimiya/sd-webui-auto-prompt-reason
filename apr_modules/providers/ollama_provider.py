@@ -4,18 +4,26 @@ Ollama provider implementation for sd-webui-auto-prompt-reason.
 This module implements the :class:`OllamaProvider` concrete class that talks to
 a locally-running Ollama inference server (default: ``http://localhost:11434``).
 
+Streaming
+---------
+Requests are sent with ``"stream": true`` to avoid Cloudflare 524 timeouts when
+the server sits behind a reverse proxy.  :py:meth:`parse_streaming_chunks`
+accumulates the SSE delta chunks into a single synthetic response dict that has
+the same shape as a non-streaming ``/v1/chat/completions`` reply, which is then
+passed to :py:meth:`parse_response` for the usual Shape A/B/C/D logic.
+
 Response parsing
 ----------------
-Two Ollama response shapes are supported:
+Four Ollama response shapes are supported:
 
-* **Shape A** (Ollama ≥ 0.7.0): the ``message`` object contains a dedicated
-  ``thinking`` field alongside ``content``.
-* **Shape B** (Ollama < 0.7.0): chain-of-thought is embedded in ``content``
-  between ``<think>`` / ``</think>`` tags.
-
-The ``</think>`` tag may be absent when the server truncates the response
-(e.g. due to a token limit).  In that case everything after ``<think>`` is
-treated as thinking and ``final_answer`` is set to an empty string.
+* **Shape A** (native ``/api/chat``, Ollama ≥ 0.7.0): the ``message`` object
+  contains a dedicated ``thinking`` field alongside ``content``.
+* **Shape B** (older Ollama): chain-of-thought is embedded in ``content``
+  between ``<think …>`` / ``</think >`` tags.
+* **Shape C** (``/v1/chat/completions`` with thinking model): Ollama exposes
+  a ``reasoning`` field in the message object.  ``content`` may be empty when
+  all tokens are consumed by reasoning.
+* **Shape D** (DeepSeek-style): ``reasoning_content`` field in the message.
 
 Security note
 -------------
@@ -25,6 +33,7 @@ and is **never** logged or printed.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional
 
@@ -152,17 +161,27 @@ class OllamaProvider(BaseProvider):
         return {
             "model": self.model_name,
             "messages": messages,
-            "stream": False,
+            "stream": True,
             "temperature": self._effort_to_temperature(reasoning_effort),
-            "max_tokens": 2048,
+            # ストリーミングにより Cloudflare 524 タイムアウトを回避する。
+            # thinking モデルは reasoning だけで3〜4万トークン消費するため、
+            # reasoning (~40000) + 最終回答 (~2000) の両方を収める値に設定。
+            "max_tokens": 50000,
         }
 
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
         """Parse an Ollama API response into a :class:`ReasoningResponse`.
 
-        Handles both Shape A (``thinking`` field) and Shape B (``<think>``
-        tags embedded in ``content``). Uses the OpenAI-compatible
-        ``/v1/chat/completions`` response format (``choices[0].message.content``).
+        Handles four response shapes:
+
+        * **Shape A** — Native ``/api/chat`` (Ollama ≥ 0.7.0):
+          ``message.thinking`` contains the reasoning trace.
+        * **Shape B** — ``<think …>`` tags embedded in ``message.content``
+          (older Ollama versions).
+        * **Shape C** — ``/v1/chat/completions`` with thinking model:
+          ``message.reasoning`` contains the reasoning trace; ``message.content``
+          may be empty when all tokens are consumed by reasoning.
+        * **Shape D** — ``reasoning_content`` field (DeepSeek-style providers).
 
         Parameters
         ----------
@@ -178,20 +197,27 @@ class OllamaProvider(BaseProvider):
         # OpenAI互換形式: choices[0].message.content
         choices: list = raw_response.get("choices", [])
         message: dict[str, Any] = choices[0].get("message", {}) if choices else {}
-        content: str = message.get("content", "")
-        logger.info(
-            "parse_response: raw keys=%s choices_len=%d message_keys=%s content_len=%d"
-            " has_thinking_field=%s",
+        # content may be None when thinking model puts all text in reasoning field
+        raw_content: Any = message.get("content")
+        content: str = raw_content if isinstance(raw_content, str) else (raw_content or "")
+
+        logger.warning(
+            "[apr][ollama][parse] raw_keys=%s choices_len=%d message_keys=%s"
+            " content_len=%s content_preview=%.200r"
+            " has_thinking=%s has_reasoning=%s has_reasoning_content=%s",
             sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
             len(choices),
             sorted(message.keys()) if isinstance(message, dict) else type(message).__name__,
-            len(content),
+            len(content) if isinstance(raw_content, str) else repr(type(raw_content).__name__),
+            content[:200],
             "thinking" in message,
+            "reasoning" in message,
+            "reasoning_content" in message,
         )
 
         if not choices:
             logger.warning(
-                "parse_response: 'choices' field missing or empty — "
+                "[apr][ollama][parse] 'choices' field missing or empty — "
                 "raw_keys=%s  (wrong endpoint or unexpected response format?)",
                 sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
             )
@@ -200,26 +226,113 @@ class OllamaProvider(BaseProvider):
         final_answer: str = content
         _shape_detected: str = "plain(no thinking)"
 
-        # --- Shape A: Ollama ≥ 0.7.0 has a dedicated ``thinking`` field ---
+        # --- Shape A: Native /api/chat — dedicated ``thinking`` field ---
         if "thinking" in message:
             _shape_detected = "A(dedicated thinking field)"
             thinking_content = message["thinking"] or None
             final_answer = content
+            logger.warning(
+                "[apr][ollama][parse] Shape-A: thinking_len=%s thinking_preview=%.200r"
+                " content_len=%d content_preview=%.200r",
+                len(thinking_content) if thinking_content else "None",
+                (thinking_content or "")[:200],
+                len(content),
+                content[:200],
+            )
+
+        # --- Shape C: /v1/chat/completions — ``reasoning`` field ---
+        # Ollama uses ``reasoning`` for thinking content in the OpenAI-compatible
+        # endpoint.  ``content`` may be empty when the model spends all tokens
+        # on reasoning.
+        elif "reasoning" in message:
+            _shape_detected = "C(reasoning field - OpenAI compat)"
+            reasoning_raw: Any = message.get("reasoning")
+            thinking_content = reasoning_raw if isinstance(reasoning_raw, str) and reasoning_raw else None
+            final_answer = content
+            logger.warning(
+                "[apr][ollama][parse] Shape-C: reasoning_len=%s reasoning_preview=%.200r"
+                " content_len=%d content_preview=%.200r",
+                len(reasoning_raw) if isinstance(reasoning_raw, str) else repr(type(reasoning_raw).__name__),
+                (reasoning_raw or "")[:200] if isinstance(reasoning_raw, str) else reasoning_raw,
+                len(content),
+                content[:200],
+            )
+            if not content.strip():
+                logger.warning(
+                    "[apr][ollama][parse] Shape-C: content is EMPTY — "
+                    "final_answer will be empty. reasoning_len=%s",
+                    len(reasoning_raw) if isinstance(reasoning_raw, str) else repr(type(reasoning_raw).__name__),
+                )
+
+        # --- Shape D: ``reasoning_content`` field (DeepSeek-style) ---
+        elif "reasoning_content" in message:
+            _shape_detected = "D(reasoning_content field)"
+            rc_raw: Any = message.get("reasoning_content")
+            thinking_content = rc_raw if isinstance(rc_raw, str) and rc_raw else None
+            final_answer = content
+            logger.warning(
+                "[apr][ollama][parse] Shape-D: reasoning_content_len=%s reasoning_content_preview=%.200r"
+                " content_len=%d content_preview=%.200r",
+                len(rc_raw) if isinstance(rc_raw, str) else repr(type(rc_raw).__name__),
+                (rc_raw or "")[:200] if isinstance(rc_raw, str) else rc_raw,
+                len(content),
+                content[:200],
+            )
+
+        # --- Shape B: thinking embedded in <think…> tags ---
         else:
-            # --- Shape B: thinking embedded in <think>…</think> tags ---
-            think_start = content.find("<think>")
-            think_end = content.find("</think>")
+            think_start = content.find("<think")
+            think_end = content.find("</think")
 
             if think_start != -1 and think_end != -1:
                 # Both tags present — clean extraction
-                _shape_detected = "B(both think tags)"
-                thinking_content = content[think_start + 7 : think_end]
-                final_answer = content[think_end + 8 :].strip()
+                # Find the closing '>' of the opening tag to skip attributes
+                tag_close = content.find(">", think_start)
+                if tag_close != -1 and tag_close < think_end:
+                    _shape_detected = "B(both think tags)"
+                    thinking_content = content[tag_close + 1 : think_end]
+                    final_answer = content[think_end + 8 :].strip()
+                    logger.warning(
+                        "[apr][ollama][parse] Shape-B(both tags): thinking_len=%d thinking_preview=%.200r"
+                        " final_answer_len=%d final_answer_preview=%.200r",
+                        len(thinking_content),
+                        thinking_content[:200],
+                        len(final_answer),
+                        final_answer[:200],
+                    )
+                else:
+                    # Malformed tag — treat as no thinking
+                    _shape_detected = "plain(malformed think tag)"
+                    logger.warning(
+                        "[apr][ollama][parse] Shape-B: malformed think tag — "
+                        "treating as plain content. content_preview=%.200r",
+                        content[:200],
+                    )
             elif think_start != -1:
                 # Opening tag only — response was truncated
-                _shape_detected = "B(unclosed think tag — truncated)"
-                thinking_content = content[think_start + 7 :]
-                final_answer = ""
+                tag_close = content.find(">", think_start)
+                if tag_close != -1:
+                    _shape_detected = "B(unclosed think tag — truncated)"
+                    thinking_content = content[tag_close + 1 :]
+                    final_answer = ""
+                    logger.warning(
+                        "[apr][ollama][parse] Shape-B(unclosed/truncated): thinking_len=%d thinking_preview=%.200r",
+                        len(thinking_content),
+                        thinking_content[:200],
+                    )
+                else:
+                    _shape_detected = "plain(malformed think tag — no closing >)"
+                    logger.warning(
+                        "[apr][ollama][parse] plain(no closing >): content_preview=%.200r",
+                        content[:200],
+                    )
+            else:
+                # No think tags at all — plain response
+                logger.warning(
+                    "[apr][ollama][parse] plain(no thinking tags): content_len=%d content_preview=%.200r",
+                    len(content),
+                    content[:200],
+                )
             # else: no tags — keep thinking_content=None, final_answer=content
 
         # OpenAI互換レスポンスのトークンカウント
@@ -228,15 +341,24 @@ class OllamaProvider(BaseProvider):
         prompt_tokens: int = usage.get("prompt_tokens", 0)
 
         # --- 診断ログ: パース結果の確認 ---
-        logger.info(
-            "parse_response: final_answer_len=%d thinking_len=%s"
-            " shape=%s completion_tokens=%d prompt_tokens=%d",
-            len(final_answer.strip()),
-            len(thinking_content) if thinking_content else "None",
+        logger.warning(
+            "[apr][ollama][parse] RESULT: shape=%s final_answer_len=%d"
+            " final_answer_preview=%.200r thinking_len=%s"
+            " completion_tokens=%d prompt_tokens=%d",
             _shape_detected,
+            len(final_answer.strip()),
+            final_answer.strip()[:200],
+            len(thinking_content) if thinking_content else "None",
             completion_tokens,
             prompt_tokens,
         )
+
+        if not final_answer.strip():
+            logger.warning(
+                "[apr][ollama][parse] WARNING: final_answer is EMPTY after shape=%s — "
+                "prompt injection will have no effect!",
+                _shape_detected,
+            )
 
         return ReasoningResponse(
             final_answer=final_answer.strip(),
@@ -251,6 +373,100 @@ class OllamaProvider(BaseProvider):
             provider="ollama",
             raw_response=raw_response,
         )
+
+    # ------------------------------------------------------------------
+    # Streaming support
+    # ------------------------------------------------------------------
+
+    def parse_streaming_chunks(self, raw_lines: list[str]) -> ReasoningResponse:
+        """Accumulate SSE lines from a streaming ``/v1/chat/completions`` response.
+
+        Each line has the form ``data: <JSON>`` or ``data: [DONE]``.
+        Delta chunks carry ``choices[0].delta`` with ``content`` and/or
+        ``reasoning`` fields.  The method collects all deltas, builds a
+        synthetic non-streaming message dict, and delegates to
+        :py:meth:`parse_response` so the usual Shape A/B/C/D logic applies.
+
+        Parameters
+        ----------
+        raw_lines:
+            Raw text lines from the HTTP response body (``iter_lines()``).
+
+        Returns
+        -------
+        ReasoningResponse
+            Normalised provider-agnostic response.
+        """
+        accumulated_content: list[str] = []
+        accumulated_reasoning: list[str] = []
+        accumulated_thinking: list[str] = []
+        finish_reason: Optional[str] = None
+        prompt_tokens: int = 0
+        completion_tokens: int = 0
+
+        for raw_line in raw_lines:
+            line = raw_line.strip() if isinstance(raw_line, str) else raw_line.decode("utf-8", errors="replace").strip()
+            if not line or line == "data: [DONE]":
+                continue
+            if line.startswith("data: "):
+                line = line[6:]
+            try:
+                chunk: dict[str, Any] = json.loads(line)
+            except json.JSONDecodeError:
+                logger.warning("[apr][ollama][stream] failed to parse SSE line: %.200r", line)
+                continue
+
+            choices: list = chunk.get("choices", [])
+            if choices and isinstance(choices[0], dict):
+                delta: dict[str, Any] = choices[0].get("delta", {})
+                if isinstance(delta, dict):
+                    c = delta.get("content") or ""
+                    r = delta.get("reasoning") or ""
+                    t = delta.get("thinking") or ""
+                    if isinstance(c, str):
+                        accumulated_content.append(c)
+                    if isinstance(r, str):
+                        accumulated_reasoning.append(r)
+                    if isinstance(t, str):
+                        accumulated_thinking.append(t)
+                fr = choices[0].get("finish_reason")
+                if fr:
+                    finish_reason = fr
+
+            # 最終チャンクに usage が含まれる場合がある
+            usage: dict[str, Any] = chunk.get("usage", {})
+            if usage:
+                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                completion_tokens = usage.get("completion_tokens", completion_tokens)
+
+        content_str = "".join(accumulated_content)
+        reasoning_str = "".join(accumulated_reasoning)
+        thinking_str = "".join(accumulated_thinking)
+
+        logger.warning(
+            "[apr][ollama][stream] accumulated content_len=%d reasoning_len=%d"
+            " thinking_len=%d finish_reason=%r",
+            len(content_str),
+            len(reasoning_str),
+            len(thinking_str),
+            finish_reason,
+        )
+
+        # 非ストリーミングレスポンスと同じ形式の合成 dict を作り parse_response に委ねる
+        message: dict[str, Any] = {"role": "assistant", "content": content_str}
+        if reasoning_str:
+            message["reasoning"] = reasoning_str
+        if thinking_str:
+            message["thinking"] = thinking_str
+
+        synthetic: dict[str, Any] = {
+            "choices": [{"message": message, "finish_reason": finish_reason}],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            },
+        }
+        return self.parse_response(synthetic)
 
     # ------------------------------------------------------------------
     # Private helpers
