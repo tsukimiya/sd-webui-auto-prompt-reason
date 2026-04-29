@@ -547,7 +547,7 @@ class LLMClient:
         # ------------------------------------------------------------------
         # Stage 5: JSON parsed
         # ------------------------------------------------------------------
-        if provider_type == ProviderType.OLLAMA.value and payload.get("stream"):
+        if provider_name == ProviderType.OLLAMA.value and payload.get("stream"):
             raw_json = _accumulate_ollama_stream(response)
             self._logger.info(
                 "[STREAM ACCUMULATED] provider=%s model=%s content_len=%d thinking_len=%s",
