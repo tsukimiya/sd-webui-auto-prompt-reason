@@ -202,6 +202,63 @@ def _contains_image(obj: Any) -> bool:  # noqa: ANN401
     return False
 
 
+def _accumulate_ollama_stream(response: requests.Response) -> dict[str, Any]:
+    """Accumulate an Ollama ``/api/chat`` streaming response into a single dict.
+
+    Each line from the response is a JSON object (NDJSON).  We walk through
+    the stream, concatenating ``message.content`` and ``message.thinking``
+    chunks.  When ``done: true`` is seen we return a dict that mimics the
+    shape of a non-streaming response so that the existing
+    ``parse_response()`` logic can be reused without modification.
+
+    Parameters
+    ----------
+    response:
+        The raw :class:`requests.Response` from the streaming POST.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dict with the same top-level keys as a non-streaming Ollama
+        response, including ``message`` (with ``content`` and optionally
+        ``thinking``), ``eval_count``, ``prompt_eval_count``, etc.
+    """
+    import json
+
+    content_parts: list[str] = []
+    thinking_parts: list[str] = []
+    final_data: dict[str, Any] = {}
+
+    for line in response.iter_lines():
+        if not line:
+            continue
+        try:
+            data: dict[str, Any] = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        msg: dict[str, Any] = data.get("message", {})
+        if "content" in msg:
+            content_parts.append(msg["content"])
+        if "thinking" in msg and msg["thinking"]:
+            thinking_parts.append(msg["thinking"])
+
+        if data.get("done"):
+            final_data = data
+            break
+
+    # Build a synthetic non-streaming response.
+    accumulated_message: dict[str, Any] = {
+        "role": "assistant",
+        "content": "".join(content_parts),
+    }
+    if thinking_parts:
+        accumulated_message["thinking"] = "".join(thinking_parts)
+
+    final_data["message"] = accumulated_message
+    return final_data
+
+
 # ---------------------------------------------------------------------------
 # LLMClient
 # ---------------------------------------------------------------------------
@@ -479,7 +536,18 @@ class LLMClient:
         # ------------------------------------------------------------------
         # Stage 5: JSON parsed
         # ------------------------------------------------------------------
-        raw_json = response.json()
+        if provider_type == ProviderType.OLLAMA.value and payload.get("stream"):
+            raw_json = _accumulate_ollama_stream(response)
+            self._logger.info(
+                "[STREAM ACCUMULATED] provider=%s model=%s content_len=%d thinking_len=%s",
+                provider_name,
+                model_name,
+                len(raw_json.get("message", {}).get("content", "")),
+                len(raw_json.get("message", {}).get("thinking", "")) or "None",
+            )
+        else:
+            raw_json = response.json()
+
         self._logger.info(
             "[JSON PARSED] provider=%s model=%s response_keys=%s",
             provider_name,

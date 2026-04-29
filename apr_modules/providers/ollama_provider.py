@@ -152,7 +152,7 @@ class OllamaProvider(BaseProvider):
         return {
             "model": self.model_name,
             "messages": messages,
-            "stream": False,
+            "stream": True,
             "keep_alive": "10m",
             "options": {
                 "temperature": self._effort_to_temperature(reasoning_effort),

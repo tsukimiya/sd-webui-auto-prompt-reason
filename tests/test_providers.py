@@ -69,7 +69,7 @@ class TestOllamaProvider:
         payload = provider.build_request("describe this image")
 
         assert payload["model"] == "llama3.2:latest"
-        assert payload["stream"] is False
+        assert payload["stream"] is True
         assert len(payload["messages"]) == 1
         assert payload["messages"][0]["role"] == "user"
         assert payload["messages"][0]["content"] == "describe this image"
