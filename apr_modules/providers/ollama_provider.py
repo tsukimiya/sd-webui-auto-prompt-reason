@@ -157,6 +157,7 @@ class OllamaProvider(BaseProvider):
             "options": {
                 "temperature": self._effort_to_temperature(reasoning_effort),
                 "num_ctx": 8192,
+                "num_predict": 16384,
             },
         }
 
@@ -200,6 +201,15 @@ class OllamaProvider(BaseProvider):
             _shape_detected = "A(dedicated thinking field)"
             thinking_content = message["thinking"] or None
             final_answer = content
+            # Fallback: if content is empty but thinking exists, the model
+            # ran out of tokens during reasoning.  Use the last paragraph of
+            # thinking as a best-effort final answer.
+            if not final_answer.strip() and thinking_content:
+                _shape_detected = "A(fallback: thinking used as answer)"
+                # Take the last non-empty line/paragraph as the answer.
+                lines = [ln.strip() for ln in thinking_content.splitlines() if ln.strip()]
+                if lines:
+                    final_answer = lines[-1]
         else:
             # --- Shape B: thinking embedded in <think>…</think> tags ---
             think_start = content.find("<think>")
