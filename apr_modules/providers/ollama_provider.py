@@ -156,7 +156,7 @@ class OllamaProvider(BaseProvider):
             "keep_alive": "10m",
             "options": {
                 "temperature": self._effort_to_temperature(reasoning_effort),
-                "num_predict": 2048,
+                "num_predict": 8192,
                 "num_ctx": 8192,
             },
         }
@@ -181,13 +181,15 @@ class OllamaProvider(BaseProvider):
         # ネイティブ形式: message.content / message.thinking
         message: dict[str, Any] = raw_response.get("message", {})
         content: str = message.get("content", "")
+        thinking: Optional[str] = message.get("thinking")
         logger.info(
-            "parse_response: raw keys=%s message_keys=%s content_len=%d"
-            " has_thinking_field=%s",
+            "parse_response: raw keys=%s message=%s content_len=%d"
+            " thinking_len=%s done_reason=%r",
             sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
-            sorted(message.keys()) if isinstance(message, dict) else type(message).__name__,
+            message,
             len(content),
-            "thinking" in message,
+            len(thinking) if thinking else "None",
+            raw_response.get("done_reason", "N/A"),
         )
 
         thinking_content: Optional[str] = None
