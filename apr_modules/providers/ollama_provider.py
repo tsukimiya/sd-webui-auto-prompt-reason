@@ -156,7 +156,6 @@ class OllamaProvider(BaseProvider):
             "keep_alive": "10m",
             "options": {
                 "temperature": self._effort_to_temperature(reasoning_effort),
-                "num_predict": 8192,
                 "num_ctx": 8192,
             },
         }
