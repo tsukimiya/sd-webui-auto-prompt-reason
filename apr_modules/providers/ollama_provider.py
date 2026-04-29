@@ -153,21 +153,24 @@ class OllamaProvider(BaseProvider):
             "model": self.model_name,
             "messages": messages,
             "stream": False,
-            "temperature": self._effort_to_temperature(reasoning_effort),
-            "max_tokens": 2048,
+            "keep_alive": "10m",
+            "options": {
+                "temperature": self._effort_to_temperature(reasoning_effort),
+                "num_predict": 2048,
+                "num_ctx": 8192,
+            },
         }
 
     def parse_response(self, raw_response: dict) -> ReasoningResponse:
-        """Parse an Ollama API response into a :class:`ReasoningResponse`.
+        """Parse an Ollama native ``/api/chat`` response into a :class:`ReasoningResponse`.
 
         Handles both Shape A (``thinking`` field) and Shape B (``<think>``
-        tags embedded in ``content``). Uses the OpenAI-compatible
-        ``/v1/chat/completions`` response format (``choices[0].message.content``).
+        tags embedded in ``content``).
 
         Parameters
         ----------
         raw_response:
-            Deserialised JSON body from the Ollama ``/v1/chat/completions`` endpoint.
+            Deserialised JSON body from the Ollama ``/api/chat`` endpoint.
 
         Returns
         -------
@@ -175,26 +178,17 @@ class OllamaProvider(BaseProvider):
             Normalised provider-agnostic response.
         """
         # --- 診断ログ: 生レスポンス構造の確認 ---
-        # OpenAI互換形式: choices[0].message.content
-        choices: list = raw_response.get("choices", [])
-        message: dict[str, Any] = choices[0].get("message", {}) if choices else {}
+        # ネイティブ形式: message.content / message.thinking
+        message: dict[str, Any] = raw_response.get("message", {})
         content: str = message.get("content", "")
         logger.info(
-            "parse_response: raw keys=%s choices_len=%d message_keys=%s content_len=%d"
+            "parse_response: raw keys=%s message_keys=%s content_len=%d"
             " has_thinking_field=%s",
             sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
-            len(choices),
             sorted(message.keys()) if isinstance(message, dict) else type(message).__name__,
             len(content),
             "thinking" in message,
         )
-
-        if not choices:
-            logger.warning(
-                "parse_response: 'choices' field missing or empty — "
-                "raw_keys=%s  (wrong endpoint or unexpected response format?)",
-                sorted(raw_response.keys()) if isinstance(raw_response, dict) else type(raw_response).__name__,
-            )
 
         thinking_content: Optional[str] = None
         final_answer: str = content
@@ -222,20 +216,19 @@ class OllamaProvider(BaseProvider):
                 final_answer = ""
             # else: no tags — keep thinking_content=None, final_answer=content
 
-        # OpenAI互換レスポンスのトークンカウント
-        usage: dict[str, Any] = raw_response.get("usage", {})
-        completion_tokens: int = usage.get("completion_tokens", 0)
-        prompt_tokens: int = usage.get("prompt_tokens", 0)
+        # ネイティブレスポンスのトークンカウント
+        eval_count: int = raw_response.get("eval_count", 0)
+        prompt_eval_count: int = raw_response.get("prompt_eval_count", 0)
 
         # --- 診断ログ: パース結果の確認 ---
         logger.info(
             "parse_response: final_answer_len=%d thinking_len=%s"
-            " shape=%s completion_tokens=%d prompt_tokens=%d",
+            " shape=%s eval_count=%d prompt_eval_count=%d",
             len(final_answer.strip()),
             len(thinking_content) if thinking_content else "None",
             _shape_detected,
-            completion_tokens,
-            prompt_tokens,
+            eval_count,
+            prompt_eval_count,
         )
 
         return ReasoningResponse(
@@ -244,8 +237,8 @@ class OllamaProvider(BaseProvider):
             reasoning_tokens=(
                 len(thinking_content.split()) if thinking_content else None
             ),
-            completion_tokens=completion_tokens,
-            total_tokens=completion_tokens + prompt_tokens,
+            completion_tokens=eval_count,
+            total_tokens=eval_count + prompt_eval_count,
             reasoning_time_ms=0,  # caller is responsible for setting this
             model=self.model_name,
             provider="ollama",

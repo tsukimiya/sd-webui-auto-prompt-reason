@@ -585,14 +585,7 @@ class LLMClient:
         provider_type = self._provider.get_provider_type()
 
         if provider_type == ProviderType.OLLAMA:
-            # Ollama は /v1/chat/completions (OpenAI互換エンドポイント) を使用する。
-            # native の /api/chat はリバースプロキシ環境(Cloudflare等)で公開されない
-            # ケースが多く、参考実装 (sd-webui-decadetw-auto-prompt-llm) も
-            # /v1/chat/completions を使用している。
-            base = self._provider.base_url
-            if base.endswith("/v1"):
-                return f"{base}/chat/completions"
-            return f"{base}/v1/chat/completions"
+            return f"{self._provider.base_url}/api/chat"
 
         if provider_type == ProviderType.GEMINI:
             # GeminiProvider._get_api_url() embeds the API key as a query param.
