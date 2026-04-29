@@ -228,8 +228,9 @@ def _accumulate_ollama_stream(response: requests.Response) -> dict[str, Any]:
     content_parts: list[str] = []
     thinking_parts: list[str] = []
     final_data: dict[str, Any] = {}
+    stream_completed = False
 
-    for line in response.iter_lines():
+    for line in response.iter_lines(decode_unicode=True):
         if not line:
             continue
         try:
@@ -245,7 +246,17 @@ def _accumulate_ollama_stream(response: requests.Response) -> dict[str, Any]:
 
         if data.get("done"):
             final_data = data
+            stream_completed = True
             break
+
+    if not stream_completed:
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "[STREAM INCOMPLETE] Ollama stream ended without done=true — "
+            "using accumulated content_len=%d thinking_len=%s",
+            len("".join(content_parts)),
+            len("".join(thinking_parts)) if thinking_parts else "None",
+        )
 
     # Build a synthetic non-streaming response.
     accumulated_message: dict[str, Any] = {
